@@ -1,0 +1,9 @@
+# Full home/dev requirements (GPU). Install with setup_home.bat or:
+#   pip install -r requirements.txt --index-url https://download.pytorch.org/whl/cu128 --extra-index-url https://pypi.org/simple
+
+torch>=2.11.0
+torchvision>=0.26.0
+ultralytics>=8.0
+opencv-python
+numpy
+pygame>=2.5

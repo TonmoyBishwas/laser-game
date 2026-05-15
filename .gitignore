@@ -1,0 +1,61 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+*.egg-info/
+.python-version
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Project — local config / state (per-machine)
+calibration.json
+detector_tuning.json
+*.log
+
+# Recordings (large, regenerated at uni)
+clips/
+clips_extra/
+*.mp4
+*.avi
+*.mov
+
+# Dataset (large, redownload from Roboflow if needed)
+Laser-Detection-1/
+Laser-Detection-*/
+extra_frames/
+
+# Base YOLO weights (auto-downloaded by ultralytics)
+yolo26n.pt
+yolo26s.pt
+yolo*.pt
+!runs/detect/laser_detector_run/weights/best.pt
+
+# YOLO training artifacts — keep only the model + args.yaml
+runs/detect/*/weights/last.pt
+runs/detect/*/weights/epoch*.pt
+runs/detect/*/labels/
+runs/detect/*/train_batch*.jpg
+runs/detect/*/val_batch*.jpg
+runs/detect/*/predict*/
+runs/detect/*/confusion_matrix*.png
+runs/detect/*/F1_curve.png
+runs/detect/*/P_curve.png
+runs/detect/*/PR_curve.png
+runs/detect/*/R_curve.png
+runs/detect/*/labels.jpg
+runs/detect/*/labels_correlogram.jpg
+runs/detect/*/results.png
+
+# Ipython / Jupyter
+.ipynb_checkpoints/
+
+# Claude's plans (per-machine)
+.claude/
