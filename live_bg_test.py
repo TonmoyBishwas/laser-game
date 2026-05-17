@@ -57,7 +57,7 @@ def drain_camera(cap: cv2.VideoCapture, n: int = 3) -> None:
 
 
 def overlay_text(screen, font, small, rgb, color_idx, color_total, color_name,
-                 phase, secs_left, live):
+                 phase, secs_label, live):
     """Small contrasting panel in top-left so the camera barely sees it."""
     bg_luma = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
     text_color = (10, 10, 10) if bg_luma > 128 else (240, 240, 240)
@@ -68,7 +68,7 @@ def overlay_text(screen, font, small, rgb, color_idx, color_total, color_name,
     screen.blit(panel, (12, 12))
 
     title = font.render(f"{color_idx + 1}/{color_total}  {color_name}", True, text_color)
-    line2 = small.render(f"[{phase}]  {secs_left:5.1f}s left", True, text_color)
+    line2 = small.render(f"[{phase}]  {secs_label}", True, text_color)
     line3 = small.render(live, True, text_color)
     hint = small.render(
         "QUIET: laser OFF screen.  ACTIVE: sweep laser.  SPACE=skip  ESC=abort",
@@ -78,6 +78,76 @@ def overlay_text(screen, font, small, rgb, color_idx, color_total, color_name,
     screen.blit(line2, (22, 56))
     screen.blit(line3, (22, 80))
     screen.blit(hint,  (22, 104))
+
+
+def _resolve_hold_color(value):
+    """Accept either a palette name (e.g. '15_dark_blue') or 'R,G,B'."""
+    for name, rgb in COLORS:
+        if value == name:
+            return rgb
+    if "," in value:
+        try:
+            parts = [int(x.strip()) for x in value.split(",")]
+            if len(parts) == 3 and all(0 <= p <= 255 for p in parts):
+                return tuple(parts)
+        except ValueError:
+            return None
+    return None
+
+
+def _run_hold(cap, model, screen, font, small, rgb, label, conf, imgsz):
+    """Stay on ONE colour. Overlay shows live counters. ESC quits."""
+    clock = pygame.time.Clock()
+    t_start = time.time()
+    frames = 0
+    dets = 0
+    sum_conf = 0.0
+    last_det_time = 0.0   # for the blink indicator
+
+    while True:
+        for e in pygame.event.get():
+            if e.type == pygame.KEYDOWN and e.key == pygame.K_ESCAPE:
+                print(f"[bgtest] HOLD exited.  "
+                      f"final: frames={frames} dets={dets} "
+                      f"hits/s={dets / max(time.time() - t_start, 1e-3):.1f}")
+                return
+
+        drain_camera(cap, 2)
+        ok, frame = cap.read()
+        if not ok or frame is None:
+            continue
+
+        result = model.predict(frame, conf=conf, imgsz=imgsz,
+                               device="cpu", verbose=False)[0]
+        n = len(result.boxes)
+        frames += 1
+        if n > 0:
+            dets += n
+            sum_conf += float(result.boxes.conf.sum().item())
+            last_det_time = time.time()
+
+        elapsed = max(time.time() - t_start, 1e-3)
+        hits_per_sec = dets / elapsed
+        mean_conf = (sum_conf / dets) if dets > 0 else 0.0
+        live = (
+            f"frames={frames}  dets={dets}  "
+            f"hits/s={hits_per_sec:.1f}  conf={mean_conf:.2f}"
+        )
+
+        screen.fill(rgb)
+        overlay_text(screen, font, small, rgb, 0, 1,
+                     f"HOLD {label}", "LIVE", f"{elapsed:.0f}s elapsed", live)
+
+        # blink indicator: bright square that fades over 0.3s after a detection
+        since_det = time.time() - last_det_time
+        if since_det < 0.3:
+            alpha = int(255 * (1.0 - since_det / 0.3))
+            blob = pygame.Surface((50, 50), pygame.SRCALPHA)
+            blob.fill((0, 255, 0, alpha))
+            screen.blit(blob, (660, 30))
+
+        pygame.display.flip()
+        clock.tick(60)
 
 
 def run_phase(cap, model, screen, font, small, rgb, idx, total, name,
@@ -144,7 +214,7 @@ def run_phase(cap, model, screen, font, small, rgb, idx, total, name,
         )
         screen.fill(rgb)
         overlay_text(screen, font, small, rgb, idx, total, name,
-                     phase, remaining, live)
+                     phase, f"{remaining:5.1f}s left", live)
         pygame.display.flip()
         clock.tick(60)
 
@@ -174,6 +244,11 @@ def main():
     p.add_argument("--start", type=int, default=0,
                    help="skip the first N colours (e.g. --start 10 to only "
                         "test the darker additions)")
+    p.add_argument("--hold", type=str, default="",
+                   help="fullscreen ONE colour forever and run detection. "
+                        "Accepts colour name from bg_palette (e.g. "
+                        "15_dark_blue) or R,G,B triple (e.g. 0,0,64). "
+                        "ESC to exit.")
     args = p.parse_args()
 
     outdir = Path(args.outdir)
@@ -200,6 +275,22 @@ def main():
     pygame.mouse.set_visible(False)
     font  = pygame.font.SysFont("monospace", 32, bold=True)
     small = pygame.font.SysFont("monospace", 20)
+
+    # ── HOLD MODE: stay on one colour forever, just monitor detections ────────
+    if args.hold:
+        rgb = _resolve_hold_color(args.hold)
+        if rgb is None:
+            print(f"[bgtest] unknown --hold value '{args.hold}'. "
+                  f"Use a name from bg_palette.py or R,G,B triple.")
+            cap.release()
+            pygame.quit()
+            return
+        print(f"[bgtest] HOLD mode on {args.hold} rgb={rgb}. ESC to exit.")
+        _run_hold(cap, model, screen, font, small, rgb, args.hold,
+                  args.conf, args.imgsz)
+        cap.release()
+        pygame.quit()
+        return
 
     selected = COLORS[args.start:]
     if args.limit > 0:
