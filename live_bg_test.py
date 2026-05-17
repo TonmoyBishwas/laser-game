@@ -27,6 +27,7 @@ Results are saved to bg_test_results/ as JSON + a readable .txt leaderboard.
 """
 
 import argparse
+import collections
 import json
 import time
 from pathlib import Path
@@ -57,7 +58,7 @@ def drain_camera(cap: cv2.VideoCapture, n: int = 3) -> None:
 
 
 def overlay_text(screen, font, small, rgb, color_idx, color_total, color_name,
-                 phase, secs_label, live):
+                 phase, secs_label, live, hint_text=None):
     """Small contrasting panel in top-left so the camera barely sees it."""
     bg_luma = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
     text_color = (10, 10, 10) if bg_luma > 128 else (240, 240, 240)
@@ -71,7 +72,7 @@ def overlay_text(screen, font, small, rgb, color_idx, color_total, color_name,
     line2 = small.render(f"[{phase}]  {secs_label}", True, text_color)
     line3 = small.render(live, True, text_color)
     hint = small.render(
-        "QUIET: laser OFF screen.  ACTIVE: sweep laser.  SPACE=skip  ESC=abort",
+        hint_text or "QUIET: laser OFF screen.  ACTIVE: sweep laser.  SPACE=skip  ESC=abort",
         True, text_color,
     )
     screen.blit(title, (22, 16))
@@ -80,37 +81,144 @@ def overlay_text(screen, font, small, rgb, color_idx, color_total, color_name,
     screen.blit(hint,  (22, 104))
 
 
-def _resolve_hold_color(value):
-    """Accept either a palette name (e.g. '15_dark_blue') or 'R,G,B'."""
-    for name, rgb in COLORS:
+def draw_history_strip(screen, history, x, y, cell=22, gap=2):
+    """Row of cells: bright green if frame had detection, dark red if not.
+
+    Newest on the right. Lets the player see continuous vs flaky vs lost
+    detection patterns at a glance.
+    """
+    n_cells = history.maxlen
+    total_w = n_cells * (cell + gap) - gap
+    # background tray with subtle border so the strip is visible on any bg
+    tray = pygame.Surface((total_w + 8, cell + 8), pygame.SRCALPHA)
+    tray.fill((0, 0, 0, 110))
+    pygame.draw.rect(tray, (255, 255, 255, 120),
+                     tray.get_rect(), width=1)
+    screen.blit(tray, (x - 4, y - 4))
+
+    # pad with False on the left if not full yet
+    padding = n_cells - len(history)
+    cells = [False] * padding + list(history)
+    for i, hit in enumerate(cells):
+        cx = x + i * (cell + gap)
+        if hit:
+            pygame.draw.rect(screen, (0, 230, 0), (cx, y, cell, cell))
+        else:
+            pygame.draw.rect(screen, (140, 0, 0), (cx, y, cell, cell))
+
+
+def draw_big_indicator(screen, since_det):
+    """Large pulsing circle in top-right.
+
+    Bright lime for ~0.1 s after a detection, fading to dark grey over
+    ~0.6 s. Always has a white outline so it's visible on any background.
+    """
+    size = 180
+    cx = screen.get_width() - size // 2 - 30
+    cy = size // 2 + 30
+
+    if since_det < 0.1:
+        ratio = 1.0
+    elif since_det < 0.6:
+        ratio = 1.0 - (since_det - 0.1) / 0.5
+    else:
+        ratio = 0.0
+
+    if ratio > 0.05:
+        color = (int(20 + 30 * ratio),
+                 int(80 + 175 * ratio),
+                 int(20 + 30 * ratio))
+    else:
+        color = (50, 50, 50)
+
+    pygame.draw.circle(screen, color, (cx, cy), size // 2)
+    pygame.draw.circle(screen, (255, 255, 255), (cx, cy), size // 2, width=4)
+    pygame.draw.circle(screen, (255, 255, 255), (cx, cy), size // 4, width=2)
+
+
+def _resolve_hold_start(value):
+    """Return (start_idx, start_rgb, label).
+
+    start_idx == -1 means custom RGB (not in palette). Other values are
+    valid palette indices. Returns None if `value` cannot be parsed.
+    """
+    if value in ("browse", ""):
+        name, rgb = COLORS[0]
+        return 0, rgb, name
+    for i, (name, rgb) in enumerate(COLORS):
         if value == name:
-            return rgb
+            return i, rgb, name
     if "," in value:
         try:
             parts = [int(x.strip()) for x in value.split(",")]
             if len(parts) == 3 and all(0 <= p <= 255 for p in parts):
-                return tuple(parts)
+                return -1, tuple(parts), f"custom({parts[0]},{parts[1]},{parts[2]})"
         except ValueError:
-            return None
+            pass
     return None
 
 
-def _run_hold(cap, model, screen, font, small, rgb, label, conf, imgsz):
-    """Stay on ONE colour. Overlay shows live counters. ESC quits."""
-    clock = pygame.time.Clock()
+def _run_hold(cap, model, screen, font, small,
+              start_idx, start_rgb, start_label, conf, imgsz):
+    """Stay on a chosen colour and let the player switch via arrow keys.
+
+    Shows a large pulsing detection indicator (top-right) and a 30-cell
+    rolling history strip (top-left, under the text panel). Stats reset
+    every time the colour changes.
+    """
+    current_idx = start_idx
+    rgb = start_rgb
+    label = start_label
+
+    history = collections.deque(maxlen=30)
     t_start = time.time()
     frames = 0
     dets = 0
     sum_conf = 0.0
-    last_det_time = 0.0   # for the blink indicator
+    last_det_time = -10.0
 
+    def reset_stats():
+        nonlocal t_start, frames, dets, sum_conf, last_det_time
+        t_start = time.time()
+        frames = 0
+        dets = 0
+        sum_conf = 0.0
+        last_det_time = -10.0
+        history.clear()
+
+    def shift_idx(delta):
+        nonlocal current_idx, rgb, label
+        if current_idx == -1:
+            current_idx = 0 if delta > 0 else len(COLORS) - 1
+        else:
+            current_idx = (current_idx + delta) % len(COLORS)
+        label, rgb = COLORS[current_idx][0], COLORS[current_idx][1]
+        reset_stats()
+
+    clock = pygame.time.Clock()
     while True:
         for e in pygame.event.get():
-            if e.type == pygame.KEYDOWN and e.key == pygame.K_ESCAPE:
-                print(f"[bgtest] HOLD exited.  "
-                      f"final: frames={frames} dets={dets} "
-                      f"hits/s={dets / max(time.time() - t_start, 1e-3):.1f}")
-                return
+            if e.type == pygame.KEYDOWN:
+                if e.key == pygame.K_ESCAPE:
+                    print(f"[bgtest] HOLD exited at {label}. "
+                          f"final: frames={frames} dets={dets} "
+                          f"hits/s={dets / max(time.time() - t_start, 1e-3):.1f}")
+                    return
+                if e.key in (pygame.K_RIGHT, pygame.K_DOWN):
+                    shift_idx(+1)
+                elif e.key in (pygame.K_LEFT, pygame.K_UP):
+                    shift_idx(-1)
+                elif e.key == pygame.K_PAGEUP:
+                    shift_idx(+5)
+                elif e.key == pygame.K_PAGEDOWN:
+                    shift_idx(-5)
+                elif e.key == pygame.K_HOME:
+                    shift_idx(-current_idx if current_idx >= 0 else +1)
+                elif e.key == pygame.K_END:
+                    shift_idx((len(COLORS) - 1 - current_idx)
+                              if current_idx >= 0 else -1)
+                elif e.key == pygame.K_r:
+                    reset_stats()
 
         drain_camera(cap, 2)
         ok, frame = cap.read()
@@ -121,7 +229,9 @@ def _run_hold(cap, model, screen, font, small, rgb, label, conf, imgsz):
                                device="cpu", verbose=False)[0]
         n = len(result.boxes)
         frames += 1
-        if n > 0:
+        detected = n > 0
+        history.append(detected)
+        if detected:
             dets += n
             sum_conf += float(result.boxes.conf.sum().item())
             last_det_time = time.time()
@@ -129,22 +239,25 @@ def _run_hold(cap, model, screen, font, small, rgb, label, conf, imgsz):
         elapsed = max(time.time() - t_start, 1e-3)
         hits_per_sec = dets / elapsed
         mean_conf = (sum_conf / dets) if dets > 0 else 0.0
+        rolling_pct = 100.0 * sum(history) / len(history) if history else 0.0
         live = (
-            f"frames={frames}  dets={dets}  "
-            f"hits/s={hits_per_sec:.1f}  conf={mean_conf:.2f}"
+            f"frames={frames}  dets={dets}  hits/s={hits_per_sec:.1f}  "
+            f"conf={mean_conf:.2f}  last30={rolling_pct:.0f}%"
         )
 
-        screen.fill(rgb)
-        overlay_text(screen, font, small, rgb, 0, 1,
-                     f"HOLD {label}", "LIVE", f"{elapsed:.0f}s elapsed", live)
+        idx_label = f"{current_idx + 1}/{len(COLORS)}" if current_idx >= 0 else "custom"
+        nav_hint = ("<-/-> change colour  PgUp/Dn jump 5  HOME/END ends  "
+                    "R reset  ESC exit")
 
-        # blink indicator: bright square that fades over 0.3s after a detection
-        since_det = time.time() - last_det_time
-        if since_det < 0.3:
-            alpha = int(255 * (1.0 - since_det / 0.3))
-            blob = pygame.Surface((50, 50), pygame.SRCALPHA)
-            blob.fill((0, 255, 0, alpha))
-            screen.blit(blob, (660, 30))
+        screen.fill(rgb)
+        # show palette index in the title (use color_idx/total for the existing renderer)
+        ci = current_idx if current_idx >= 0 else 0
+        ct = len(COLORS)
+        overlay_text(screen, font, small, rgb, ci, ct, label,
+                     "LIVE", f"{elapsed:.0f}s elapsed", live,
+                     hint_text=nav_hint)
+        draw_history_strip(screen, history, x=22, y=160)
+        draw_big_indicator(screen, time.time() - last_det_time)
 
         pygame.display.flip()
         clock.tick(60)
@@ -244,11 +357,11 @@ def main():
     p.add_argument("--start", type=int, default=0,
                    help="skip the first N colours (e.g. --start 10 to only "
                         "test the darker additions)")
-    p.add_argument("--hold", type=str, default="",
-                   help="fullscreen ONE colour forever and run detection. "
-                        "Accepts colour name from bg_palette (e.g. "
-                        "15_dark_blue) or R,G,B triple (e.g. 0,0,64). "
-                        "ESC to exit.")
+    p.add_argument("--hold", type=str, nargs="?", const="browse", default=None,
+                   help="fullscreen one colour and run detection forever. "
+                        "Use plain '--hold' to start at colour 1 and arrow "
+                        "through, '--hold 15_dark_blue' to start there, or "
+                        "'--hold 0,0,64' for a custom RGB. ESC to exit.")
     args = p.parse_args()
 
     outdir = Path(args.outdir)
@@ -276,17 +389,20 @@ def main():
     font  = pygame.font.SysFont("monospace", 32, bold=True)
     small = pygame.font.SysFont("monospace", 20)
 
-    # ── HOLD MODE: stay on one colour forever, just monitor detections ────────
-    if args.hold:
-        rgb = _resolve_hold_color(args.hold)
-        if rgb is None:
+    # ── HOLD MODE: stay on one colour, arrow-key through palette ─────────────
+    if args.hold is not None:
+        resolved = _resolve_hold_start(args.hold)
+        if resolved is None:
             print(f"[bgtest] unknown --hold value '{args.hold}'. "
-                  f"Use a name from bg_palette.py or R,G,B triple.")
+                  f"Use a name from bg_palette.py, 'browse', or an R,G,B triple.")
             cap.release()
             pygame.quit()
             return
-        print(f"[bgtest] HOLD mode on {args.hold} rgb={rgb}. ESC to exit.")
-        _run_hold(cap, model, screen, font, small, rgb, args.hold,
+        start_idx, start_rgb, start_label = resolved
+        print(f"[bgtest] HOLD mode on {start_label} rgb={start_rgb}. "
+              f"<-/-> to change colour, ESC to exit.")
+        _run_hold(cap, model, screen, font, small,
+                  start_idx, start_rgb, start_label,
                   args.conf, args.imgsz)
         cap.release()
         pygame.quit()
