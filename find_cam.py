@@ -25,9 +25,17 @@ BACKENDS = {
 }
 
 
-def open_cam(index: int, backend: int) -> cv2.VideoCapture:
+def open_cam(index: int, backend: int, fourcc: str = "",
+             width: int = 0, height: int = 0) -> cv2.VideoCapture:
     cap = cv2.VideoCapture(index, backend)
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    if fourcc:
+        code = cv2.VideoWriter_fourcc(*fourcc.upper().ljust(4)[:4])
+        cap.set(cv2.CAP_PROP_FOURCC, code)
+    if width > 0:
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+    if height > 0:
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
     return cap
 
 
@@ -72,15 +80,19 @@ def scan() -> list[dict]:
     return results
 
 
-def preview(index: int, backend: int) -> None:
+def preview(index: int, backend: int, fourcc: str = "",
+            width: int = 0, height: int = 0) -> None:
     """Show live feed so the user can visually confirm which camera this is."""
-    cap = open_cam(index, backend)
+    cap = open_cam(index, backend, fourcc, width, height)
     if not cap.isOpened():
         print(f"[preview] cannot open index={index} backend={backend}")
         return
 
     bname = [k for k, v in BACKENDS.items() if v == backend][0]
-    win = f"Preview index={index} backend={bname}  (q=quit)"
+    extra = f" fourcc={fourcc}" if fourcc else ""
+    if width > 0 or height > 0:
+        extra += f" size={width}x{height}"
+    win = f"Preview index={index} backend={bname}{extra}  (q=quit)"
     cv2.namedWindow(win, cv2.WINDOW_NORMAL)
 
     print(f"\n[preview] showing index={index} backend={bname}. Press 'q' to quit.")
@@ -111,10 +123,17 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--preview", type=int, default=None, help="Force preview of this index")
     parser.add_argument("--backend", choices=list(BACKENDS), default="AUTO", help="Backend for preview")
+    parser.add_argument("--fourcc", type=str, default="",
+                        help="force pixel format, e.g. MJPG (fixes DroidCam green-screen)")
+    parser.add_argument("--width", type=int, default=0,
+                        help="force camera width (e.g. 640)")
+    parser.add_argument("--height", type=int, default=0,
+                        help="force camera height (e.g. 480)")
     args = parser.parse_args()
 
     if args.preview is not None:
-        preview(args.preview, BACKENDS[args.backend])
+        preview(args.preview, BACKENDS[args.backend],
+                args.fourcc, args.width, args.height)
         return
 
     results = scan()

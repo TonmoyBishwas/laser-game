@@ -48,10 +48,24 @@ BACKENDS = {
 }
 
 
-def open_camera(index: int, backend_name: str = "AUTO") -> cv2.VideoCapture:
+def open_camera(index: int, backend_name: str = "AUTO",
+                fourcc: str = "", width: int = 0, height: int = 0) -> cv2.VideoCapture:
+    """Open a camera and (optionally) force a pixel format / resolution.
+
+    DroidCam over USB often advertises YUY2/NV12 which some OpenCV builds
+    decode wrong and produce a solid green buffer. Forcing MJPG via
+    CAP_PROP_FOURCC is the standard fix.
+    """
     backend = BACKENDS[backend_name]
     cap = cv2.VideoCapture(index, backend)
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    if fourcc:
+        code = cv2.VideoWriter_fourcc(*fourcc.upper().ljust(4)[:4])
+        cap.set(cv2.CAP_PROP_FOURCC, code)
+    if width > 0:
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+    if height > 0:
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
     if not cap.isOpened():
         raise RuntimeError(
             f"Cannot open camera index={index} backend={backend_name}")
@@ -373,6 +387,15 @@ def main():
                    help="OpenCV camera backend: AUTO (default), DSHOW, or "
                         "MSMF. Try MSMF or DSHOW if AUTO picks the built-in "
                         "webcam instead of DroidCam.")
+    p.add_argument("--fourcc", type=str, default="",
+                   help="force a pixel format like MJPG or YUY2. Use "
+                        "--fourcc MJPG if DroidCam shows a solid green / "
+                        "garbled feed.")
+    p.add_argument("--cam-width", type=int, default=0,
+                   help="force camera capture width (e.g. 640). Some "
+                        "DroidCam configs need an explicit resolution.")
+    p.add_argument("--cam-height", type=int, default=0,
+                   help="force camera capture height (e.g. 480).")
     p.add_argument("--quiet", type=float, default=0.0,
                    help="seconds of quiet phase (laser OFF) for false-positive "
                         "measurement. Default 0 = skip. Pass e.g. --quiet 2 to "
@@ -402,8 +425,10 @@ def main():
     outdir.mkdir(parents=True, exist_ok=True)
 
     print(f"[bgtest] opening camera index={args.device} "
-          f"backend={args.backend}...")
-    cap = open_camera(args.device, args.backend)
+          f"backend={args.backend} fourcc={args.fourcc or 'default'} "
+          f"size={args.cam_width or 'def'}x{args.cam_height or 'def'}...")
+    cap = open_camera(args.device, args.backend, args.fourcc,
+                      args.cam_width, args.cam_height)
     for _ in range(10):
         cap.read()
     cam_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
