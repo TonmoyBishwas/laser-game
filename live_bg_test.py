@@ -36,20 +36,7 @@ import pygame
 from ultralytics import YOLO
 
 from game import config as cfg
-
-
-COLORS = [
-    ("01_black",   (  0,   0,   0)),
-    ("02_white",   (255, 255, 255)),
-    ("03_red",     (255,   0,   0)),
-    ("04_green",   (  0, 255,   0)),
-    ("05_blue",    (  0,   0, 255)),
-    ("06_cyan",    (  0, 255, 255)),
-    ("07_magenta", (255,   0, 255)),
-    ("08_yellow",  (255, 255,   0)),
-    ("09_gray50",  (128, 128, 128)),
-    ("10_gray25",  ( 64,  64,  64)),
-]
+from bg_palette import COLORS
 
 
 def open_camera(index: int) -> cv2.VideoCapture:
@@ -69,7 +56,7 @@ def drain_camera(cap: cv2.VideoCapture, n: int = 3) -> None:
         cap.read()
 
 
-def overlay_text(screen, font, small, rgb, color_idx, color_name,
+def overlay_text(screen, font, small, rgb, color_idx, color_total, color_name,
                  phase, secs_left, live):
     """Small contrasting panel in top-left so the camera barely sees it."""
     bg_luma = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
@@ -80,7 +67,7 @@ def overlay_text(screen, font, small, rgb, color_idx, color_name,
     panel.fill(panel_color)
     screen.blit(panel, (12, 12))
 
-    title = font.render(f"{color_idx + 1}/10  {color_name}", True, text_color)
+    title = font.render(f"{color_idx + 1}/{color_total}  {color_name}", True, text_color)
     line2 = small.render(f"[{phase}]  {secs_left:5.1f}s left", True, text_color)
     line3 = small.render(live, True, text_color)
     hint = small.render(
@@ -93,7 +80,7 @@ def overlay_text(screen, font, small, rgb, color_idx, color_name,
     screen.blit(hint,  (22, 104))
 
 
-def run_phase(cap, model, screen, font, small, rgb, idx, name,
+def run_phase(cap, model, screen, font, small, rgb, idx, total, name,
               phase, duration, conf, imgsz):
     """Run a single phase (QUIET or ACTIVE) for `duration` s.
 
@@ -156,7 +143,7 @@ def run_phase(cap, model, screen, font, small, rgb, idx, name,
             f"hits/s={hits_so_far:.1f}  conf={mean_conf_so_far:.2f}"
         )
         screen.fill(rgb)
-        overlay_text(screen, font, small, rgb, idx, name,
+        overlay_text(screen, font, small, rgb, idx, total, name,
                      phase, remaining, live)
         pygame.display.flip()
         clock.tick(60)
@@ -182,6 +169,11 @@ def main():
     p.add_argument("--windowed", action="store_true",
                    help="windowed mode for desk testing")
     p.add_argument("--outdir", type=str, default="bg_test_results")
+    p.add_argument("--limit", type=int, default=0,
+                   help="only test the first N colours (0 = all 30)")
+    p.add_argument("--start", type=int, default=0,
+                   help="skip the first N colours (e.g. --start 10 to only "
+                        "test the darker additions)")
     args = p.parse_args()
 
     outdir = Path(args.outdir)
@@ -209,11 +201,18 @@ def main():
     font  = pygame.font.SysFont("monospace", 32, bold=True)
     small = pygame.font.SysFont("monospace", 20)
 
+    selected = COLORS[args.start:]
+    if args.limit > 0:
+        selected = selected[:args.limit]
+    print(f"[bgtest] testing {len(selected)} colours "
+          f"(from index {args.start})")
+
     rows = []
     aborted = False
+    total = len(selected)
     try:
-        for idx, (name, rgb) in enumerate(COLORS):
-            print(f"[bgtest] {idx + 1}/10  {name}  rgb={rgb}")
+        for idx, (name, rgb) in enumerate(selected):
+            print(f"[bgtest] {idx + 1}/{total}  {name}  rgb={rgb}")
 
             # 0.5 s of just showing the colour so the camera adapts
             screen.fill(rgb)
@@ -226,7 +225,7 @@ def main():
 
             # QUIET phase (laser OFF) — counts false positives
             qf, qd, qc, _, qskip, qabort = run_phase(
-                cap, model, screen, font, small, rgb, idx, name,
+                cap, model, screen, font, small, rgb, idx, total, name,
                 "QUIET", args.quiet, args.conf, args.imgsz)
             if qabort:
                 aborted = True
@@ -243,7 +242,7 @@ def main():
 
             # ACTIVE phase (laser ON) — measures hits, conf, miss%
             af, ad, ac, windows, askip, aabort = run_phase(
-                cap, model, screen, font, small, rgb, idx, name,
+                cap, model, screen, font, small, rgb, idx, total, name,
                 "ACTIVE", args.active, args.conf, args.imgsz)
             if aabort:
                 aborted = True

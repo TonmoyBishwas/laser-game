@@ -12,19 +12,7 @@ from pathlib import Path
 import numpy as np
 import cv2
 
-
-COLORS = [
-    ("01_black",   (  0,   0,   0)),
-    ("02_white",   (255, 255, 255)),
-    ("03_red",     (255,   0,   0)),
-    ("04_green",   (  0, 255,   0)),
-    ("05_blue",    (  0,   0, 255)),
-    ("06_cyan",    (  0, 255, 255)),
-    ("07_magenta", (255,   0, 255)),
-    ("08_yellow",  (255, 255,   0)),
-    ("09_gray50",  (128, 128, 128)),
-    ("10_gray25",  ( 64,  64,  64)),
-]
+from bg_palette import COLORS
 
 W, H = 1920, 1080
 
