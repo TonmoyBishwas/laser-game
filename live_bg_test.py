@@ -1,23 +1,23 @@
 """
 Live background-color detection leaderboard.
 
-Cycles the projector through 10 solid-colour fullscreen backgrounds while a
+Cycles the projector through 30 solid-colour fullscreen backgrounds while a
 YOLO model runs on the live DroidCam feed. For each colour, measures:
 
   - hits/sec   : how many frames per second got a laser detection
   - mean_conf  : mean confidence over detections (0..1)
   - miss%      : % of 1-second windows in the active phase with zero detections
-  - fp/sec     : false positives per second during a 2 s "quiet" phase at the
-                 start of each colour (you DON'T point the laser at the screen)
+  - fp/sec     : false positives per second during the optional QUIET phase
+                 (only measured if you pass --quiet N)
 
 Run from the project root (so the venv + model paths resolve):
 
   venv\\Scripts\\python.exe live_bg_test.py
-  venv\\Scripts\\python.exe live_bg_test.py --device 0 --quiet 2 --active 15
+  venv\\Scripts\\python.exe live_bg_test.py --start 10            # darker only
+  venv\\Scripts\\python.exe live_bg_test.py --quiet 2 --active 15 # with FP
 
-During each colour:
-  - First, a 2 s QUIET phase  -> point the laser OFF the screen (floor, ceiling).
-  - Then a 15 s ACTIVE phase  -> sweep the laser around the screen as in Phase 2.
+By default each colour just runs an ACTIVE phase: sweep the laser around the
+screen the entire 15 s — centre, corners, edges, fast + slow.
 
 Keys:
   SPACE   skip the current colour
@@ -341,8 +341,10 @@ def run_phase(cap, model, screen, font, small, rgb, idx, total, name,
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--device", type=int, default=0)
-    p.add_argument("--quiet", type=float, default=2.0,
-                   help="seconds of quiet phase (laser OFF) per colour")
+    p.add_argument("--quiet", type=float, default=0.0,
+                   help="seconds of quiet phase (laser OFF) for false-positive "
+                        "measurement. Default 0 = skip. Pass e.g. --quiet 2 to "
+                        "enable.")
     p.add_argument("--active", type=float, default=15.0,
                    help="seconds of active phase (laser sweeping) per colour")
     p.add_argument("--conf", type=float, default=0.20,
@@ -430,22 +432,23 @@ def main():
                 screen.fill(rgb)
                 pygame.display.flip()
 
-            # QUIET phase (laser OFF) — counts false positives
-            qf, qd, qc, _, qskip, qabort = run_phase(
-                cap, model, screen, font, small, rgb, idx, total, name,
-                "QUIET", args.quiet, args.conf, args.imgsz)
-            if qabort:
-                aborted = True
-                break
-            if qskip:
-                # treat skip during quiet as "skip the whole colour"
-                rows.append({
-                    "name": name, "rgb": list(rgb),
-                    "skipped": True,
-                    "quiet": {"frames": qf, "detections": qd},
-                    "active": None,
-                })
-                continue
+            # QUIET phase (laser OFF) — only if --quiet > 0
+            qf, qd = 0, 0
+            if args.quiet > 0:
+                qf, qd, _qc, _, qskip, qabort = run_phase(
+                    cap, model, screen, font, small, rgb, idx, total, name,
+                    "QUIET", args.quiet, args.conf, args.imgsz)
+                if qabort:
+                    aborted = True
+                    break
+                if qskip:
+                    rows.append({
+                        "name": name, "rgb": list(rgb),
+                        "skipped": True,
+                        "quiet": {"frames": qf, "detections": qd},
+                        "active": None,
+                    })
+                    continue
 
             # ACTIVE phase (laser ON) — measures hits, conf, miss%
             af, ad, ac, windows, askip, aabort = run_phase(
@@ -454,14 +457,13 @@ def main():
             if aabort:
                 aborted = True
                 # still record what we measured
-            quiet_secs = max(args.quiet, 1e-3)
             active_secs = max(args.active, 1e-3)
             hits_per_sec = ad / active_secs
             mean_conf = (ac / ad) if ad > 0 else 0.0
             miss_pct = (
                 100.0 * sum(1 for w in windows if w == 0) / max(len(windows), 1)
             )
-            fp_per_sec = qd / quiet_secs
+            fp_per_sec = (qd / args.quiet) if args.quiet > 0 else 0.0
 
             row = {
                 "name": name,
