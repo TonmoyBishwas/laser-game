@@ -33,6 +33,7 @@ import time
 from pathlib import Path
 
 import cv2
+import numpy as np
 import pygame
 from ultralytics import YOLO
 
@@ -40,16 +41,42 @@ from game import config as cfg
 from bg_palette import COLORS
 
 
-def open_camera(index: int) -> cv2.VideoCapture:
-    cap = cv2.VideoCapture(index, cv2.CAP_ANY)
+BACKENDS = {
+    "AUTO":  cv2.CAP_ANY,
+    "DSHOW": cv2.CAP_DSHOW,
+    "MSMF":  cv2.CAP_MSMF,
+}
+
+
+def open_camera(index: int, backend_name: str = "AUTO") -> cv2.VideoCapture:
+    backend = BACKENDS[backend_name]
+    cap = cv2.VideoCapture(index, backend)
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     if not cap.isOpened():
-        raise RuntimeError(f"Cannot open camera {index}")
+        raise RuntimeError(
+            f"Cannot open camera index={index} backend={backend_name}")
     ok, _ = cap.read()
     if not ok:
         cap.release()
-        raise RuntimeError(f"Camera {index} opened but cannot read frames")
+        raise RuntimeError(
+            f"Camera index={index} backend={backend_name} opened "
+            f"but cannot read frames")
     return cap
+
+
+def probe_camera(cap: cv2.VideoCapture) -> float:
+    """Read a few frames and return the mean pixel value.
+
+    Low mean (<50) typically = DroidCam aimed at a dim projector.
+    High mean (>80)  typically = built-in laptop webcam aimed at the user.
+    Use this to confirm which physical camera the OpenCV index resolved to.
+    """
+    means = []
+    for _ in range(8):
+        ok, frame = cap.read()
+        if ok and frame is not None and frame.size > 0:
+            means.append(float(np.mean(frame)))
+    return float(np.mean(means)) if means else -1.0
 
 
 def drain_camera(cap: cv2.VideoCapture, n: int = 3) -> None:
@@ -340,7 +367,12 @@ def run_phase(cap, model, screen, font, small, rgb, idx, total, name,
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--device", type=int, default=0)
+    p.add_argument("--device", type=int, default=0,
+                   help="camera index (try 0, 1, 2... if the wrong one opens)")
+    p.add_argument("--backend", choices=list(BACKENDS), default="AUTO",
+                   help="OpenCV camera backend: AUTO (default), DSHOW, or "
+                        "MSMF. Try MSMF or DSHOW if AUTO picks the built-in "
+                        "webcam instead of DroidCam.")
     p.add_argument("--quiet", type=float, default=0.0,
                    help="seconds of quiet phase (laser OFF) for false-positive "
                         "measurement. Default 0 = skip. Pass e.g. --quiet 2 to "
@@ -369,14 +401,25 @@ def main():
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    print(f"[bgtest] opening camera {args.device}...")
-    cap = open_camera(args.device)
+    print(f"[bgtest] opening camera index={args.device} "
+          f"backend={args.backend}...")
+    cap = open_camera(args.device, args.backend)
     for _ in range(10):
         cap.read()
     cam_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
     cam_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     cam_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    print(f"[bgtest] camera fps={cam_fps:.1f} size={cam_w}x{cam_h}")
+    mean = probe_camera(cap)
+    print(f"[bgtest] camera fps={cam_fps:.1f} size={cam_w}x{cam_h} mean={mean:.1f}")
+    if mean > 80:
+        print(f"[bgtest] WARNING: mean brightness is high ({mean:.1f}). "
+              f"This usually means the built-in WEBCAM was opened, not "
+              f"DroidCam. Try --device 1, --device 2, or "
+              f"--backend MSMF / --backend DSHOW.")
+    elif mean < 0:
+        print(f"[bgtest] WARNING: could not read frames; camera likely wrong.")
+    else:
+        print(f"[bgtest] mean looks plausible for DroidCam (dim projector view).")
 
     print(f"[bgtest] loading YOLO from {cfg.MODEL_PATH}")
     model = YOLO(cfg.MODEL_PATH)

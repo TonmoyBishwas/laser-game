@@ -163,7 +163,27 @@ tuned-for-i3 settings.
 venv\Scripts\python.exe find_cam.py
 ```
 
-If DroidCam isn't appearing in `find_cam.py`:
+`live_bg_test.py` now prints the mean pixel brightness of the first
+frame so you can confirm which camera was opened:
+
+- `mean=4.3` (low) — DroidCam aimed at a dim projector. Correct.
+- `mean=120.5` (high) — built-in laptop WEBCAM aimed at you. Wrong.
+  The script prints a WARNING when this happens.
+
+If the wrong camera opens, try in order:
+
+```
+venv\Scripts\python.exe live_bg_test.py --hold --device 1
+venv\Scripts\python.exe live_bg_test.py --hold --device 2
+venv\Scripts\python.exe live_bg_test.py --hold --backend MSMF
+venv\Scripts\python.exe live_bg_test.py --hold --backend DSHOW
+venv\Scripts\python.exe live_bg_test.py --hold --device 1 --backend MSMF
+```
+
+These flags also work for the auto-leaderboard run (`live_bg_test.py`
+without `--hold`).
+
+If DroidCam isn't appearing at any index/backend:
 
 1. Phone DroidCam app open.
 2. Windows DroidCam app open, USB tab clicked.
@@ -198,7 +218,8 @@ venv\Scripts\python.exe -m game.main --profile uni --recalibrate --debug
 
 | flag              | default | meaning |
 |-------------------|---------|---------|
-| `--device N`      | 0       | camera index (DroidCam usually 0) |
+| `--device N`      | 0       | camera index (DroidCam usually 0; try 1/2 if the wrong cam opens) |
+| `--backend B`     | AUTO    | `AUTO`, `DSHOW`, or `MSMF` — force a backend if AUTO picks the wrong camera |
 | `--quiet S`       | 0       | seconds of false-positive measurement (0 = skip) |
 | `--active S`      | 15      | seconds of laser-sweeping per colour |
 | `--conf F`        | 0.20    | YOLO confidence threshold |
