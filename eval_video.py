@@ -34,7 +34,7 @@ from ultralytics import YOLO
 from game import config as cfg
 
 
-WINDOW = "eval_video — q=next  p=pause  ESC=quit"
+WINDOW = "eval_video - q=next  p=pause  ESC=quit"
 
 
 def list_clips(source: str) -> list[Path]:
@@ -50,7 +50,8 @@ def list_clips(source: str) -> list[Path]:
 
 def evaluate_clip(clip: Path, model: YOLO, conf: float, imgsz: int,
                   device: str, show_window: bool,
-                  save_video: Path | None) -> dict:
+                  save_video: Path | None,
+                  display_max_w: int = 1280) -> dict:
     cap = cv2.VideoCapture(str(clip))
     if not cap.isOpened():
         print(f"[eval] FAILED to open {clip}")
@@ -135,7 +136,13 @@ def evaluate_clip(clip: Path, model: YOLO, conf: float, imgsz: int,
                 writer.write(annotated)
 
             if show_window:
-                cv2.imshow(WINDOW, annotated)
+                disp = annotated
+                if disp.shape[1] > display_max_w:
+                    scale = display_max_w / disp.shape[1]
+                    new_w = int(disp.shape[1] * scale)
+                    new_h = int(disp.shape[0] * scale)
+                    disp = cv2.resize(annotated, (new_w, new_h))
+                cv2.imshow(WINDOW, disp)
 
         if show_window:
             key = cv2.waitKey(1) & 0xFF
@@ -206,6 +213,10 @@ def main() -> None:
                    help="run headlessly without showing the preview window")
     p.add_argument("--out", type=str, default="eval_results",
                    help="folder to write JSON / TXT summaries to")
+    p.add_argument("--display-width", type=int, default=1280,
+                   help="max width (px) for the preview window; 4K clips "
+                        "get downscaled to fit. Inference still runs on "
+                        "the full-resolution frame.")
     args = p.parse_args()
 
     clips = list_clips(args.source)
@@ -233,7 +244,8 @@ def main() -> None:
             target = save_video_path
         s = evaluate_clip(clip, model, args.conf, args.imgsz, args.device,
                           show_window=not args.no_window,
-                          save_video=target)
+                          save_video=target,
+                          display_max_w=args.display_width)
         summaries.append(s)
         if s.get("aborted"):
             print("[eval] aborted by user (ESC).")
