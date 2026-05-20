@@ -146,6 +146,9 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--profile", default="uni", choices=list(PROFILES))
     p.add_argument("--device", type=int, default=None, help="camera index override")
+    p.add_argument("--model", default=None,
+                   help="path to a model to use instead of the default .pt — "
+                        "e.g. an exported best.onnx (faster CPU inference)")
     p.add_argument("--imgsz", type=int, default=None,
                    help="override YOLO input size; lower = faster inference "
                         "(try 320 if tracking still lags)")
@@ -162,6 +165,8 @@ def main() -> None:
         cfg.DROIDCAM_DEVICE_INDEX = args.device
     if args.imgsz is not None:
         cfg.YOLO_IMGSZ = args.imgsz
+    if args.model is not None:
+        cfg.MODEL_PATH = args.model
     print(f"[sandbox] profile={args.profile} cam={cfg.DROIDCAM_DEVICE_INDEX} "
           f"imgsz={cfg.YOLO_IMGSZ} device={cfg.YOLO_DEVICE}")
 
