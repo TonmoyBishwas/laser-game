@@ -148,7 +148,11 @@ def main() -> None:
     p.add_argument("--device", type=int, default=None, help="camera index override")
     p.add_argument("--model", default=None,
                    help="path to a model to use instead of the default .pt — "
-                        "e.g. an exported best.onnx (faster CPU inference)")
+                        "e.g. an exported best.onnx or best_openvino_model dir")
+    p.add_argument("--yolo-device", default=None,
+                   help="inference device: cpu, cuda:0, or for an OpenVINO "
+                        "model intel:gpu / intel:cpu (iGPU offloads inference "
+                        "off the CPU). Defaults to the profile value.")
     p.add_argument("--imgsz", type=int, default=None,
                    help="override YOLO input size; lower = faster inference "
                         "(try 320 if tracking still lags)")
@@ -171,6 +175,8 @@ def main() -> None:
         cfg.YOLO_IMGSZ = args.imgsz
     if args.model is not None:
         cfg.MODEL_PATH = args.model
+    if args.yolo_device is not None:
+        cfg.YOLO_DEVICE = args.yolo_device
     cfg.MAX_DETECT_FPS = args.max_detect_fps
     print(f"[sandbox] profile={args.profile} cam={cfg.DROIDCAM_DEVICE_INDEX} "
           f"imgsz={cfg.YOLO_IMGSZ} device={cfg.YOLO_DEVICE}")

@@ -44,7 +44,11 @@ def main() -> None:
     p.add_argument("--backend", choices=list(BACKENDS), default="AUTO",
                    help="OpenCV camera backend")
     p.add_argument("--yolo", type=str, default="cpu",
-                   help="YOLO device: cpu (uni) or cuda:0 (home)")
+                   help="YOLO device: cpu, cuda:0, or for an OpenVINO model "
+                        "intel:gpu / intel:cpu")
+    p.add_argument("--model", default=None,
+                   help="model path override (e.g. best_openvino_model dir or "
+                        "best.onnx); defaults to the config .pt")
     p.add_argument("--conf", type=float, default=0.20,
                    help="YOLO confidence threshold")
     p.add_argument("--imgsz", type=int, default=512,
@@ -53,10 +57,14 @@ def main() -> None:
                    help="max preview width; big feeds are downscaled to fit")
     args = p.parse_args()
 
-    print(f"[detect] loading YOLO from {cfg.MODEL_PATH}")
-    model = YOLO(cfg.MODEL_PATH)
-    model.to(args.yolo)
-    print(f"[detect] yolo={args.yolo} imgsz={args.imgsz} conf={args.conf}")
+    model_path = args.model or cfg.MODEL_PATH
+    print(f"[detect] loading YOLO from {model_path}")
+    model = YOLO(model_path)
+    # .to() only works on .pt PyTorch models; exported formats take the device
+    # via predict() instead.
+    if str(model_path).lower().endswith(".pt"):
+        model.to(args.yolo)
+    print(f"[detect] model={model_path} yolo={args.yolo} imgsz={args.imgsz} conf={args.conf}")
 
     print(f"[detect] opening camera index={args.device} backend={args.backend}")
     cap = cv2.VideoCapture(args.device, BACKENDS[args.backend])

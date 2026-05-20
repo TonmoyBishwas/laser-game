@@ -22,6 +22,16 @@ def _resolve_device(preferred: str) -> str:
     if preferred.startswith("cuda") and not torch.cuda.is_available():
         print(f"[detector] WARNING: requested {preferred} but CUDA is unavailable; falling back to CPU")
         return "cpu"
+    if preferred.startswith("intel:gpu"):
+        # OpenVINO iGPU path — fall back to CPU if no GPU plugin/device is visible.
+        try:
+            from openvino import Core
+            if "GPU" not in Core().available_devices:
+                print("[detector] Intel GPU not visible to OpenVINO; falling back to intel:cpu")
+                return "intel:cpu"
+        except Exception as e:
+            print(f"[detector] OpenVINO GPU check failed ({e}); falling back to intel:cpu")
+            return "intel:cpu"
     return preferred
 
 
