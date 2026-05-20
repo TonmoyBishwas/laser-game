@@ -128,10 +128,11 @@ def build_grid() -> pygame.Surface:
     return surf, targets
 
 
-def draw_overlay(screen, x, y, spot_surf, radius, dark_alpha, hole_alpha):
+def draw_overlay(screen, overlay, x, y, spot_surf, radius, dark_alpha, hole_alpha):
+    # `overlay` is a persistent SRCALPHA surface reused every frame (no per-frame
+    # allocation — that allocation was starving the YOLO thread of CPU).
     if dark_alpha <= 0:
         return
-    overlay = pygame.Surface((cfg.GAME_W, cfg.GAME_H), pygame.SRCALPHA)
     overlay.fill((0, 0, 0, int(dark_alpha)))
     if hole_alpha > 5:
         scaled = spot_surf.copy()
@@ -145,6 +146,12 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--profile", default="uni", choices=list(PROFILES))
     p.add_argument("--device", type=int, default=None, help="camera index override")
+    p.add_argument("--imgsz", type=int, default=None,
+                   help="override YOLO input size; lower = faster inference "
+                        "(try 320 if tracking still lags)")
+    p.add_argument("--render-fps", type=int, default=30,
+                   help="cap the render loop FPS; lower frees CPU for YOLO "
+                        "(default 30 — the spotlight stays smooth)")
     p.add_argument("--windowed", action="store_true")
     p.add_argument("--recalibrate", action="store_true")
     args = p.parse_args()
@@ -153,6 +160,8 @@ def main() -> None:
         setattr(cfg, k, v)
     if args.device is not None:
         cfg.DROIDCAM_DEVICE_INDEX = args.device
+    if args.imgsz is not None:
+        cfg.YOLO_IMGSZ = args.imgsz
     print(f"[sandbox] profile={args.profile} cam={cfg.DROIDCAM_DEVICE_INDEX} "
           f"imgsz={cfg.YOLO_IMGSZ} device={cfg.YOLO_DEVICE}")
 
@@ -186,6 +195,11 @@ def main() -> None:
     clock = pygame.time.Clock()
 
     grid_surf, targets = build_grid()
+    # Pre-scale the grid ONCE (scaling 1920x1080 every frame was eating the CPU
+    # that YOLO needs). Reuse a single overlay surface for the same reason.
+    grid_scaled = pygame.transform.scale(grid_surf, screen.get_size())
+    overlay_surf = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
+    render_fps = max(10, args.render_fps)
 
     # tunable parameters
     params = [
@@ -242,7 +256,7 @@ def main() -> None:
 
     running = True
     while running:
-        dt = clock.tick(cfg.TARGET_FPS) / 1000.0
+        dt = clock.tick(render_fps) / 1000.0
 
         for e in pygame.event.get():
             if e.type == pygame.QUIT:
@@ -306,13 +320,13 @@ def main() -> None:
 
         # ── render ──────────────────────────────────────────────────────────────
         if show_grid:
-            screen.blit(pygame.transform.scale(grid_surf, screen.get_size()), (0, 0))
+            screen.blit(grid_scaled, (0, 0))
         else:
             screen.fill((6, 6, 14))
 
         sx = smoothed[0] * screen.get_width() / cfg.GAME_W
         sy = smoothed[1] * screen.get_height() / cfg.GAME_H
-        draw_overlay(screen, sx, sy, spot_surf, radius,
+        draw_overlay(screen, overlay_surf, sx, sy, spot_surf, radius,
                      dark_alpha=pv("dark_alpha"), hole_alpha=int(spot_alpha))
 
         # crosshairs (on top, always visible)
