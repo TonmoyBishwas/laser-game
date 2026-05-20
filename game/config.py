@@ -12,6 +12,10 @@ MODEL_PATH = os.path.join(
 YOLO_CONF   = 0.25
 YOLO_IMGSZ  = 640   # match training resolution for best recall; lower if FPS suffers
 YOLO_DEVICE = "cuda:0"
+# Cap detector inference rate (fps). 0 = unlimited. On CPU-only machines a fast
+# backend (onnx/openvino) can run inference back-to-back and starve the render
+# thread of CPU; capping leaves gaps so the spotlight redraws smoothly.
+MAX_DETECT_FPS = 0
 
 # ── Camera ─────────────────────────────────────────────────────────────────────
 DROIDCAM_DEVICE_INDEX = 0

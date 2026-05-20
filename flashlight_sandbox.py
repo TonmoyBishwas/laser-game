@@ -155,6 +155,10 @@ def main() -> None:
     p.add_argument("--render-fps", type=int, default=30,
                    help="cap the render loop FPS; lower frees CPU for YOLO "
                         "(default 30 — the spotlight stays smooth)")
+    p.add_argument("--max-detect-fps", type=int, default=12,
+                   help="cap inference FPS so it doesn't starve rendering. "
+                        "With a fast backend (onnx) running flat-out hogs the "
+                        "CPU and the screen stalls; 0 = unlimited.")
     p.add_argument("--windowed", action="store_true")
     p.add_argument("--recalibrate", action="store_true")
     args = p.parse_args()
@@ -167,6 +171,7 @@ def main() -> None:
         cfg.YOLO_IMGSZ = args.imgsz
     if args.model is not None:
         cfg.MODEL_PATH = args.model
+    cfg.MAX_DETECT_FPS = args.max_detect_fps
     print(f"[sandbox] profile={args.profile} cam={cfg.DROIDCAM_DEVICE_INDEX} "
           f"imgsz={cfg.YOLO_IMGSZ} device={cfg.YOLO_DEVICE}")
 

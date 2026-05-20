@@ -68,6 +68,9 @@ class DetectorThread(threading.Thread):
         infer_count = 0
         detect_count = 0
 
+        max_fps = getattr(cfg, "MAX_DETECT_FPS", 0) or 0
+        min_interval = (1.0 / max_fps) if max_fps > 0 else 0.0
+
         while not self._stop_event.is_set():
             triggered = self._shared.frame_event.wait(timeout=0.05)
             if not triggered:
@@ -80,6 +83,7 @@ class DetectorThread(threading.Thread):
             if frame is None:
                 continue
 
+            iter_start = time.time()
             results = model.predict(
                 frame,
                 conf=cfg.YOLO_CONF,
@@ -134,6 +138,13 @@ class DetectorThread(threading.Thread):
                 infer_count = 0
                 detect_count = 0
                 last_report = now
+
+            # Throttle inference rate so it doesn't run back-to-back and starve
+            # the render thread of CPU. Sleeping here releases CPU/GIL.
+            if min_interval > 0:
+                spare = min_interval - (time.time() - iter_start)
+                if spare > 0:
+                    time.sleep(spare)
 
         print("[detector] stopped")
 
