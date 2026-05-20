@@ -57,8 +57,12 @@ class DetectorThread(threading.Thread):
     def run(self) -> None:
         device = _resolve_device(cfg.YOLO_DEVICE)
         model = YOLO(cfg.MODEL_PATH)
-        model.to(device)
-        print(f"[detector] model loaded on {device}, conf={cfg.YOLO_CONF}, imgsz={cfg.YOLO_IMGSZ}")
+        # .to() only works on .pt PyTorch models. Exported formats (onnx,
+        # openvino) take the device via predict() instead.
+        if str(cfg.MODEL_PATH).lower().endswith(".pt"):
+            model.to(device)
+        print(f"[detector] model loaded ({cfg.MODEL_PATH}) on {device}, "
+              f"conf={cfg.YOLO_CONF}, imgsz={cfg.YOLO_IMGSZ}")
 
         last_report = time.time()
         infer_count = 0
