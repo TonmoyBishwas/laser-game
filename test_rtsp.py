@@ -10,8 +10,10 @@ same URL can be fed to the detection step.
 
 Usage
 -----
-  venv\Scripts\python.exe test_rtsp.py --url rtsp://192.168.1.50:5540/ch0
-  venv\Scripts\python.exe test_rtsp.py            (it will prompt for the URL)
+  1. Edit RTSP_URL in rtsp_url.py once, then just run:
+       venv\Scripts\python.exe test_rtsp.py
+  2. Or override on the command line:
+       venv\Scripts\python.exe test_rtsp.py --url rtsp://192.168.1.50:5540/ch0
 
 Keys in the window:
   q or ESC   quit
@@ -33,6 +35,8 @@ import time
 import cv2
 import numpy as np
 
+from rtsp_url import RTSP_URL
+
 
 def open_rtsp(url: str) -> cv2.VideoCapture:
     # FFMPEG is the backend that handles RTSP in OpenCV.
@@ -44,21 +48,21 @@ def open_rtsp(url: str) -> cv2.VideoCapture:
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--url", type=str, default="",
-                   help="RTSP URL, e.g. rtsp://192.168.1.50:5540/ch0")
+                   help="RTSP URL override; defaults to RTSP_URL in rtsp_url.py")
     p.add_argument("--display-width", type=int, default=1280,
                    help="max preview width; big streams are downscaled to fit")
     p.add_argument("--seconds", type=float, default=0,
                    help="auto-stop after N seconds (0 = run until you press q)")
     args = p.parse_args()
 
-    url = args.url.strip()
+    url = args.url.strip() or RTSP_URL.strip()
     if not url:
         try:
             url = input("Paste your RTSP URL and press Enter:\n> ").strip()
         except EOFError:
             url = ""
     if not url:
-        print("[rtsp] no URL given. Re-run with --url rtsp://...")
+        print("[rtsp] no URL. Set RTSP_URL in rtsp_url.py or pass --url rtsp://...")
         return
 
     print(f"[rtsp] opening: {url}")
