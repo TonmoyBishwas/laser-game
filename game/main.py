@@ -13,6 +13,11 @@ Usage
   python -m game.main --profile home        # CUDA + imgsz=640 (default, dev PC)
 """
 
+import os
+# Fix DroidCam green/garbled feed: disable MSMF hardware transforms BEFORE
+# cv2 (or any game submodule that imports it) is loaded.
+os.environ["OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS"] = "0"
+
 # Device profiles — applied to game.config BEFORE detector imports anything from it.
 PROFILES = {
     "home": {"YOLO_DEVICE": "cuda:0", "YOLO_IMGSZ": 640, "YOLO_CONF": 0.25},
@@ -20,7 +25,6 @@ PROFILES = {
 }
 
 import argparse
-import os
 import threading
 import time
 

@@ -1,13 +1,51 @@
 # DroidCam Green-Screen Fix
 
-Copy-paste reference for fixing the DroidCam green-screen issue on the
-friend's i3 laptop. Pull latest first:
+Copy-paste reference for fixing the DroidCam green-screen issue. Pull
+latest first:
 
 ```
 git pull
 ```
 
-## Context
+## THE REAL FIX (try this first)
+
+The green/garbled feed is caused by OpenCV's Media Foundation (MSMF)
+backend using **hardware transforms** that DroidCam's virtual camera
+driver can't feed correctly. The fix is the environment variable
+`OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS=0`.
+
+**This is now baked into `find_cam.py`, `live_bg_test.py`, and
+`game/main.py`** — they set it automatically before importing OpenCV.
+So after `git pull`, just re-run find_cam and the MSMF feed should show
+the real image instead of green:
+
+```
+venv\Scripts\python.exe find_cam.py
+venv\Scripts\python.exe find_cam.py --preview 1 --backend MSMF
+venv\Scripts\python.exe find_cam.py --preview 2 --backend MSMF
+venv\Scripts\python.exe find_cam.py --preview 1 --backend AUTO
+```
+
+If the previously-green DroidCam index now shows the projector image,
+you're done — use that index/backend:
+
+```
+venv\Scripts\python.exe live_bg_test.py --device 1 --backend MSMF --hold
+```
+
+If you ever need to set the variable manually in a fresh PowerShell
+(e.g. for a script that doesn't set it itself):
+
+```
+$env:OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS = "0"
+```
+
+If that fixes it, skip the rest of this file. The MJPG / fourcc tricks
+below are only fallbacks for when the env-var fix doesn't take.
+
+---
+
+## Context (older notes)
 
 - `index=0` = laptop's built-in webcam (mean ~125, bright)
 - `index=1` = DroidCam virtual camera (currently green-screen bug)

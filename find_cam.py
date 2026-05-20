@@ -12,8 +12,15 @@ In the preview window, press:
   n  → try next working camera (cycles through them)
 """
 
+import os
+# DroidCam and some webcams render a solid green / garbled feed when OpenCV's
+# Media Foundation (MSMF) backend uses hardware transforms. Disabling them is
+# the standard fix. MUST be set before cv2 is imported.
+os.environ["OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS"] = "0"
+
 import argparse
 import sys
+
 import cv2
 import numpy as np
 

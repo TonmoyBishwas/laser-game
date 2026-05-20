@@ -26,6 +26,11 @@ Keys:
 Results are saved to bg_test_results/ as JSON + a readable .txt leaderboard.
 """
 
+import os
+# Fix DroidCam green/garbled feed: disable MSMF hardware transforms BEFORE
+# cv2 (and ultralytics, which imports cv2) is loaded.
+os.environ["OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS"] = "0"
+
 import argparse
 import collections
 import json
