@@ -29,7 +29,51 @@ a normal camera OpenCV can read.
 
 ---
 
-## THE OBS VIRTUAL CAMERA BRIDGE (the actual solution)
+## UPDATE: DroidCam virtual camera is broken even for OBS
+
+Selecting "DroidCam Source" as an OBS **Video Capture Device** also
+shows green — so the DroidCam *virtual webcam* itself outputs garbage to
+every consumer (OBS and OpenCV). The DroidCam *client window* shows the
+feed fine, which means: phone -> USB -> DroidCam client = OK, but
+DroidCam client -> virtual webcam device = BROKEN.
+
+**Workaround that bypasses the broken virtual camera entirely: have OBS
+do a WINDOW CAPTURE of the DroidCam client window (which renders
+correctly), then publish that via OBS Virtual Camera.**
+
+### OBS Window Capture method (USE THIS)
+
+1. In OBS, delete the green "DroidCam" Video Capture Device source.
+2. Keep the DroidCam PC client window open and showing the live feed
+   (move it to a corner, do NOT minimize).
+3. Sources -> + -> **Window Capture** -> name "DroidCam" -> OK.
+4. Properties: **Window** dropdown -> pick the DroidCam client window
+   (e.g. `[DroidCam.exe]`). Capture Method -> "Windows 10 (1903 and
+   up)" / WGC. The OBS canvas shows the client window with live feed.
+5. OK.
+6. Crop to just the video: select the source on the canvas, hold **Alt**
+   and drag the edge handles inward to trim title bar / borders, then
+   drag the corners so the video fills the canvas.
+7. Controls -> **Start Virtual Camera**. Leave OBS + DroidCam client
+   open all session.
+8. `venv\Scripts\python.exe find_cam.py` -> the OBS Virtual Camera now
+   has a CHANGING mean (live). Preview to find its index:
+   ```
+   venv\Scripts\python.exe find_cam.py --preview 2 --backend AUTO
+   venv\Scripts\python.exe find_cam.py --preview 3 --backend AUTO
+   ```
+9. Use that index everywhere:
+   ```
+   venv\Scripts\python.exe live_bg_test.py --device 2 --backend AUTO --hold
+   venv\Scripts\python.exe -m game.main --profile uni --device 2 --recalibrate --debug
+   ```
+
+The 4-corner calibration handles any framing, so the crop need not be
+perfect.
+
+---
+
+## (Did not work here) OBS Video Capture Device of DroidCam Source
 
 1. Install OBS Studio if not present (free, ~120 MB, obsproject.com).
 2. Open OBS.
