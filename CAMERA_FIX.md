@@ -7,7 +7,64 @@ latest first:
 git pull
 ```
 
-## THE REAL FIX (try this first)
+## CONFIRMED DIAGNOSIS (2026-05-20, i7 uni laptop)
+
+`cam_diag.py` proved the green/frozen feed is NOT a colour bug:
+
+- index 1 returns a constant `mean=45.33` across 60 frames (spread 0.00)
+  = a FROZEN buffer, no flowing video.
+- `fourcc=''` (empty) = OpenCV never negotiated a real video stream.
+- DSHOW throws "can't capture by index" = DroidCam's DirectShow filter
+  is not reachable by OpenCV's index scan.
+
+Conclusions:
+- Index 1 is most likely the laptop's **IR / Windows Hello camera**
+  (static dark frame when idle), NOT DroidCam.
+- **DroidCam is not enumerable by OpenCV by index on this laptop.**
+
+=> The env-var / fourcc / backend tricks below CANNOT help, because
+there is no stream to decode. The fix is the **OBS Virtual Camera
+bridge** (Step OBS, below): OBS grabs DroidCam by name and republishes
+a normal camera OpenCV can read.
+
+---
+
+## THE OBS VIRTUAL CAMERA BRIDGE (the actual solution)
+
+1. Install OBS Studio if not present (free, ~120 MB, obsproject.com).
+2. Open OBS.
+3. In the **Sources** box (bottom), click **+** -> **Video Capture
+   Device** -> name it "DroidCam" -> OK.
+4. In Properties, open the **Device** dropdown and pick the entry whose
+   name contains **DroidCam** (e.g. "DroidCam Source 1", "DroidCam
+   Source 2", or "DroidCam Source 3"). Try each until the OBS preview
+   shows the live phone feed.
+5. Click **OK**. The OBS canvas must now show the live projector image.
+   (If every DroidCam entry is black in OBS too, the phone-PC link is
+   the problem — go to the Wi-Fi fallback at the bottom.)
+6. In the **Controls** box (bottom-right) click **Start Virtual
+   Camera**. The label flips to "Stop Virtual Camera".
+7. **Leave OBS open the entire session.** Closing it kills the camera.
+8. Back in the terminal:
+   ```
+   venv\Scripts\python.exe find_cam.py
+   ```
+   A NEW working camera appears (often the highest index) labelled OBS
+   Virtual Camera, with a CHANGING mean (not frozen). Preview it:
+   ```
+   venv\Scripts\python.exe find_cam.py --preview 2 --backend AUTO
+   venv\Scripts\python.exe find_cam.py --preview 3 --backend AUTO
+   ```
+9. When a preview shows the projector image, use that index everywhere:
+   ```
+   venv\Scripts\python.exe live_bg_test.py --device 2 --backend AUTO --hold
+   venv\Scripts\python.exe -m game.main --profile uni --device 2 --recalibrate --debug
+   ```
+   No `--fourcc` needed — OBS Virtual Camera is well-behaved.
+
+---
+
+## (Older tricks — only relevant if a stream IS flowing) The env-var fix
 
 The green/garbled feed is caused by OpenCV's Media Foundation (MSMF)
 backend using **hardware transforms** that DroidCam's virtual camera
