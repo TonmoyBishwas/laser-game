@@ -9,8 +9,8 @@ Usage
   python -m game.main --fullscreen          # fullscreen on projector
   python -m game.main --debug               # YOLO preview + HUD stats + Q-bars
   python -m game.main --policy other.npz    # load a different Q-table
-  python -m game.main --profile uni         # CPU + imgsz=320 (friend's laptop / demo)
-  python -m game.main --profile home        # CUDA + imgsz=640 (default, dev PC)
+  python -m game.main --profile uni         # CPU + imgsz=512 + cam index 2 (uni i7 / demo)
+  python -m game.main --profile home        # CUDA + imgsz=640 + cam index 0 (default, dev PC)
 """
 
 import os
@@ -20,8 +20,13 @@ os.environ["OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS"] = "0"
 
 # Device profiles — applied to game.config BEFORE detector imports anything from it.
 PROFILES = {
-    "home": {"YOLO_DEVICE": "cuda:0", "YOLO_IMGSZ": 640, "YOLO_CONF": 0.25},
-    "uni":  {"YOLO_DEVICE": "cpu",    "YOLO_IMGSZ": 320, "YOLO_CONF": 0.20},
+    "home": {"YOLO_DEVICE": "cuda:0", "YOLO_IMGSZ": 640, "YOLO_CONF": 0.25,
+             "DROIDCAM_DEVICE_INDEX": 0},
+    # uni laptop is an i7/16GB (no GPU) running IriunCam at index 2.
+    # imgsz 512 (vs the old i3-era 320) gives much better small-laser recall
+    # and the i7 has the headroom. Drop to 416/320 if detection feels laggy.
+    "uni":  {"YOLO_DEVICE": "cpu",    "YOLO_IMGSZ": 512, "YOLO_CONF": 0.20,
+             "DROIDCAM_DEVICE_INDEX": 2},
 }
 
 import argparse
@@ -116,7 +121,7 @@ def main() -> None:
     parser.add_argument("--debug",       action="store_true",    help="YOLO preview window + HUD stats + Q-bars")
     parser.add_argument("--policy",      type=str, default=POLICY_PATH, help="Path to Q-table NPZ")
     parser.add_argument("--profile",     type=str, default="home", choices=list(PROFILES),
-                        help="'home' = CUDA + imgsz 640; 'uni' = CPU + imgsz 320")
+                        help="'home' = CUDA + imgsz 640 + cam 0; 'uni' = CPU + imgsz 512 + cam 2")
     args = parser.parse_args()
 
     # Apply the device profile BEFORE the detector thread reads cfg.YOLO_*.
@@ -150,7 +155,7 @@ def main() -> None:
     shared     = SharedState()
     stop_event = threading.Event()
 
-    capture_thread  = cap_mod.CaptureThread(shared, stop_event)
+    capture_thread  = cap_mod.CaptureThread(shared, stop_event, device_index=DROIDCAM_DEVICE_INDEX)
     detector_thread = det_mod.DetectorThread(shared, stop_event, calibration, debug=args.debug)
     capture_thread.start()
     detector_thread.start()

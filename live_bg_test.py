@@ -409,8 +409,9 @@ def main():
                    help="seconds of active phase (laser sweeping) per colour")
     p.add_argument("--conf", type=float, default=0.20,
                    help="YOLO confidence threshold (default 0.20)")
-    p.add_argument("--imgsz", type=int, default=320,
-                   help="YOLO input size (default 320 for CPU speed)")
+    p.add_argument("--imgsz", type=int, default=512,
+                   help="YOLO input size (512 suits the uni i7; drop to 320 "
+                        "for more speed, raise to 640 for max recall)")
     p.add_argument("--windowed", action="store_true",
                    help="windowed mode for desk testing")
     p.add_argument("--outdir", type=str, default="bg_test_results")
