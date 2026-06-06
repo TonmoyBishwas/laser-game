@@ -61,18 +61,28 @@ class SharedState:
         self.preview_lock  = threading.Lock()
 
 
-def _open_camera(index: int) -> cv2.VideoCapture:
-    cap = cv2.VideoCapture(index, cv2.CAP_ANY)
+def _open_camera(source) -> cv2.VideoCapture:
+    # source is an int device index OR an MJPEG-over-HTTP URL string
+    # (openwebcam app). A URL is read natively by OpenCV's FFmpeg backend;
+    # an int index goes through CAP_ANY.
+    if isinstance(source, str):
+        cap = cv2.VideoCapture(source)
+        backend = "URL"
+    else:
+        cap = cv2.VideoCapture(source, cv2.CAP_ANY)
+        backend = "CAP_ANY"
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     if cap.isOpened():
         ok, frame = cap.read()
         if ok and frame is not None:
-            print(f"[main] camera {index} opened via CAP_ANY")
+            print(f"[main] camera {source!r} opened via {backend}")
             return cap
     cap.release()
     raise RuntimeError(
-        f"Cannot open camera device {index}. "
-        "Make sure DroidCam USB is connected and the PC client shows 'Connected'."
+        f"Cannot open camera source {source!r}. "
+        "USB index: check the webcam is connected. "
+        "Stream URL: confirm the phone app is streaming (test with "
+        "test_mobile_cam.py first)."
     )
 
 
@@ -117,6 +127,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Laser Guard — find the thief in the dark")
     parser.add_argument("--recalibrate", action="store_true", help="Force new 4-corner calibration")
     parser.add_argument("--device",      type=int, default=None, help="Camera device index override")
+    parser.add_argument("--url",         type=str, default=None,
+                        help="Camera stream URL (e.g. http://localhost:8090/video from the "
+                             "openwebcam app). Overrides --device / profile camera index.")
     parser.add_argument("--fullscreen",  action="store_true",    help="Fullscreen on projector")
     parser.add_argument("--debug",       action="store_true",    help="YOLO preview window + HUD stats + Q-bars")
     parser.add_argument("--policy",      type=str, default=POLICY_PATH, help="Path to Q-table NPZ")
@@ -136,12 +149,15 @@ def main() -> None:
 
     from game.config import DROIDCAM_DEVICE_INDEX
 
+    # A --url stream (openwebcam) takes priority over any device index.
+    camera_source = args.url if args.url else DROIDCAM_DEVICE_INDEX
+
     # ── Load policy ───────────────────────────────────────────────────────────
     policy = _load_policy(args.policy)
 
     # ── Camera + calibration ──────────────────────────────────────────────────
     print("[main] opening camera for calibration…")
-    cap = _open_camera(DROIDCAM_DEVICE_INDEX)
+    cap = _open_camera(camera_source)
     try:
         calibration = cal_mod.Calibration.load_or_run(cap, force=args.recalibrate)
     except RuntimeError as e:
@@ -155,7 +171,7 @@ def main() -> None:
     shared     = SharedState()
     stop_event = threading.Event()
 
-    capture_thread  = cap_mod.CaptureThread(shared, stop_event, device_index=DROIDCAM_DEVICE_INDEX)
+    capture_thread  = cap_mod.CaptureThread(shared, stop_event, source=camera_source)
     detector_thread = det_mod.DetectorThread(shared, stop_event, calibration, debug=args.debug)
     capture_thread.start()
     detector_thread.start()
