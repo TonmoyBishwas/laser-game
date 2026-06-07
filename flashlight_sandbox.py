@@ -195,7 +195,7 @@ def main() -> None:
     shared = SharedState()
     stop_event = threading.Event()
     capture_thread = cap_mod.CaptureThread(shared, stop_event,
-                                           device_index=cfg.DROIDCAM_DEVICE_INDEX)
+                                           source=cfg.DROIDCAM_DEVICE_INDEX)
     detector_thread = det_mod.DetectorThread(shared, stop_event, calibration, debug=False)
     capture_thread.start()
     detector_thread.start()
