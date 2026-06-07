@@ -130,7 +130,25 @@ def _load_policy(path: str) -> QPolicy:
     return policy
 
 
+def _enable_dpi_awareness() -> None:
+    """Windows: opt into DPI awareness so the 1920x1080 fullscreen window maps
+    1:1 to physical pixels. Without this, display scaling >100% makes pygame
+    render larger than the screen and the bottom/right of the maze get cropped.
+    Must run before the pygame window is created."""
+    if os.name != "nt":
+        return
+    import ctypes
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # per-monitor DPI aware
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+
 def main() -> None:
+    _enable_dpi_awareness()
     parser = argparse.ArgumentParser(description="Laser Guard — find the thief in the dark")
     parser.add_argument("--recalibrate", action="store_true", help="Force new 4-corner calibration")
     parser.add_argument("--device",      type=int, default=None, help="Camera device index override")
