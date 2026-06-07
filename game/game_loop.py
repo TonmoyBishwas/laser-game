@@ -86,6 +86,20 @@ def _get_spotlight_base() -> pygame.Surface:
     return _SPOTLIGHT_BASE
 
 
+# Full-screen dark overlay — allocated ONCE and reused every frame. A fresh
+# 1920x1080 SRCALPHA surface per frame is a big needless alloc that competes
+# with YOLO for CPU (the contention that stalled rendering). The sandbox reuses
+# it for the same reason; fill() fully resets it each frame.
+_OVERLAY: pygame.Surface | None = None
+
+
+def _get_overlay() -> pygame.Surface:
+    global _OVERLAY
+    if _OVERLAY is None:
+        _OVERLAY = pygame.Surface((GAME_W, GAME_H), pygame.SRCALPHA)
+    return _OVERLAY
+
+
 # ── Maze surface cache ─────────────────────────────────────────────────────────
 def _build_maze_surface(maze: Maze) -> pygame.Surface:
     surf = pygame.Surface((GAME_W, GAME_H))
@@ -116,8 +130,8 @@ def _draw_dark_overlay(
     """
     if dark_alpha <= 0:
         return
-    overlay = pygame.Surface((GAME_W, GAME_H), pygame.SRCALPHA)
-    overlay.fill((0, 0, 0, dark_alpha))
+    overlay = _get_overlay()
+    overlay.fill((0, 0, 0, dark_alpha))   # full reset each frame (clears last hole)
 
     if hole_alpha > 5:
         base = _get_spotlight_base()

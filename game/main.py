@@ -9,7 +9,7 @@ Usage
   python -m game.main --fullscreen          # fullscreen on projector
   python -m game.main --debug               # YOLO preview + HUD stats + Q-bars
   python -m game.main --policy other.npz    # load a different Q-table
-  python -m game.main --profile uni         # CPU + imgsz=512 + cam index 2 (uni i7 / demo)
+  python -m game.main --profile uni         # OpenVINO iGPU + imgsz=320 (uni i7 / demo)
   python -m game.main --profile home        # CUDA + imgsz=640 + cam index 0 (default, dev PC)
 """
 
@@ -19,14 +19,21 @@ import os
 os.environ["OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS"] = "0"
 
 # Device profiles — applied to game.config BEFORE detector imports anything from it.
+_REPO_ROOT = os.path.dirname(os.path.dirname(__file__))
+_OPENVINO_MODEL = os.path.join(
+    _REPO_ROOT, r"runs\detect\laser_detector_run\weights\best_openvino_model")
+
 PROFILES = {
     "home": {"YOLO_DEVICE": "cuda:0", "YOLO_IMGSZ": 640, "YOLO_CONF": 0.25,
              "DROIDCAM_DEVICE_INDEX": 0},
-    # uni laptop is an i7/16GB (no GPU) running IriunCam at index 2.
-    # imgsz 512 (vs the old i3-era 320) gives much better small-laser recall
-    # and the i7 has the headroom. Drop to 416/320 if detection feels laggy.
-    "uni":  {"YOLO_DEVICE": "cpu",    "YOLO_IMGSZ": 512, "YOLO_CONF": 0.20,
-             "DROIDCAM_DEVICE_INDEX": 2},
+    # uni laptop = i7 + Intel Iris Xe iGPU running IriunCam. Field-tested
+    # winning recipe: the OpenVINO model offloaded to the iGPU (intel:gpu) at
+    # imgsz 320 — inference keeps up with the ~30 fps camera without starving
+    # the 60 fps render loop (the CPU stays free). Auto-falls back to intel:cpu
+    # if the iGPU isn't visible. Camera index varies per setup — override with
+    # --device (was 2 last session, 0 today).
+    "uni":  {"YOLO_DEVICE": "intel:gpu", "YOLO_IMGSZ": 320, "YOLO_CONF": 0.20,
+             "MODEL_PATH": _OPENVINO_MODEL, "DROIDCAM_DEVICE_INDEX": 2},
 }
 
 import argparse
