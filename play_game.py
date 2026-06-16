@@ -37,8 +37,14 @@ def _thief(app):
     return create(app)
 
 
+def _fruit_ninja(app):
+    from games.fruit_ninja.game import create
+    return create(app)
+
+
 GAMES = {
     "thief": _thief,
+    "fruit_ninja": _fruit_ninja,
 }
 
 

@@ -12,12 +12,20 @@ The original RL game is untouched and remains the backup:
 
     python -m game.main           --profile uni --fullscreen        # backup (RL thief, fixed maze)
 
-This new game:
+This launcher (laser only — the mouse is never used to play here):
 
-    python play_laser_arcade.py   --profile uni --fullscreen        # A* thief, random mazes, doors, art
+    python play_laser_arcade.py   --profile uni --fullscreen        # menu: pick a game with the laser
+    python play_laser_arcade.py   --profile uni --fullscreen --game thief        # straight into the thief
+    python play_laser_arcade.py   --profile uni --fullscreen --game fruit_ninja  # straight into fruit ninja
 
 Both share the same calibration file and the same --profile / --device / --url
 options, so calibrating once works for either.
+
+Aim correction: if the spotlight lands a little off from where the laser
+actually points, nudge it live with the ARROW KEYS while playing (press the
+direction you want the spot to move; it saves automatically), or pass a known
+offset with --offset-x / --offset-y. The correction is stored in the
+calibration file and applies to BOTH games and the RL backup.
 """
 
 import os
@@ -28,6 +36,8 @@ import sys
 import argparse
 import threading
 import time
+
+import pygame
 
 _REPO = os.path.dirname(os.path.abspath(__file__))
 # The vendored arcade engine + games (copied from the laser-arcade repo) live
@@ -42,12 +52,18 @@ from game import detector as det_mod
 from game.main import SharedState, _open_camera, PROFILES, _run_debug_preview
 import game.config as cfg
 
-# Vendored engine + game (from arcade_game/ on sys.path)
+# Vendored engine + games (from arcade_game/ on sys.path)
 from arcade.display import enable_dpi_awareness
-from arcade.scene import GameApp
+from arcade.scene import GameApp, MenuScene, Scene
 from arcade.input import Pointer, PointerSource
 from arcade.config import GAME_W, GAME_H
 from games.thief.game import create as create_thief
+from games.fruit_ninja.game import create as create_fruit
+
+GAME_FACTORIES = {
+    "thief": create_thief,
+    "fruit_ninja": create_fruit,
+}
 
 
 class LaserPointer(PointerSource):
@@ -89,6 +105,57 @@ class LaserPointer(PointerSource):
         return Pointer(x, y, bool(active), vx, vy)
 
 
+class AimNudgeScene(Scene):
+    """Wrap a game scene to let the operator zero the laser aim live.
+
+    The arrow keys nudge the calibration offset by a few game pixels and save it
+    immediately, so the spotlight can be aligned to where the laser actually
+    points without restarting. Press the direction you want the spot to MOVE.
+    Everything else (gameplay, the R restart key, etc.) passes through to the
+    real game untouched. This lives in the laser launcher (not the vendored
+    engine), so it survives re-vendoring the games.
+    """
+
+    NUDGE = 4  # game pixels per arrow press
+
+    def __init__(self, app, inner: Scene, calibration):
+        super().__init__(app)
+        self._inner = inner
+        self._cal = calibration
+        self._font = pygame.font.SysFont("monospace", 28, bold=True)
+        self._show_until = 0.0
+
+    @property
+    def show_pointer(self) -> bool:               # mirror the wrapped game
+        return getattr(self._inner, "show_pointer", True)
+
+    def handle_event(self, event) -> None:
+        if event.type == pygame.KEYDOWN and event.key in (
+            pygame.K_LEFT, pygame.K_RIGHT, pygame.K_UP, pygame.K_DOWN):
+            ox, oy = self._cal.offset
+            if event.key == pygame.K_LEFT:    ox -= self.NUDGE
+            elif event.key == pygame.K_RIGHT: ox += self.NUDGE
+            elif event.key == pygame.K_UP:    oy -= self.NUDGE
+            elif event.key == pygame.K_DOWN:  oy += self.NUDGE
+            self._cal.offset = (ox, oy)           # same object the detector holds
+            self._cal.save()                      # persist so it sticks next run
+            self._show_until = time.time() + 4.0
+            return
+        self._inner.handle_event(event)
+
+    def update(self, dt: float, pointer: Pointer) -> None:
+        self._inner.update(dt, pointer)
+
+    def draw(self, surface) -> None:
+        self._inner.draw(surface)
+        if time.time() < self._show_until:
+            ox, oy = self._cal.offset
+            txt = self._font.render(
+                f"aim offset  x={ox:+.0f}  y={oy:+.0f}   (arrow keys nudge - saved)",
+                True, (255, 230, 120))
+            surface.blit(txt, (30, GAME_H - 50))
+
+
 def main() -> None:
     enable_dpi_awareness()
 
@@ -103,6 +170,12 @@ def main() -> None:
     parser.add_argument("--debug", action="store_true", help="YOLO preview window + detector stats")
     parser.add_argument("--profile", type=str, default="home", choices=list(PROFILES),
                         help="'home' = CUDA + imgsz 640 + cam 0; 'uni' = OpenVINO iGPU + imgsz 320")
+    parser.add_argument("--game", type=str, default=None, choices=list(GAME_FACTORIES),
+                        help="launch a game directly; omit to show the laser-pickable menu")
+    parser.add_argument("--offset-x", type=float, default=None, dest="offset_x",
+                        help="laser aim correction in game px (+x = move the spot RIGHT); persisted")
+    parser.add_argument("--offset-y", type=float, default=None, dest="offset_y",
+                        help="laser aim correction in game px (+y = move the spot DOWN); persisted")
     args = parser.parse_args()
 
     # Apply the device profile to game.config BEFORE the detector thread reads it.
@@ -127,6 +200,20 @@ def main() -> None:
     cap.release()
     time.sleep(0.3)
 
+    # Apply a known aim correction from the CLI (absolute, in game px) and save it.
+    # Otherwise keep whatever the calibration file already had; live arrow-key
+    # nudges during play update and re-save it from there.
+    if args.offset_x is not None or args.offset_y is not None:
+        ox, oy = calibration.offset
+        if args.offset_x is not None:
+            ox = args.offset_x
+        if args.offset_y is not None:
+            oy = args.offset_y
+        calibration.offset = (ox, oy)
+        calibration.save()
+    print(f"[arcade] laser aim offset = {calibration.offset} game px "
+          f"(+x right, +y down) — nudge live with the arrow keys")
+
     # ── Threads ────────────────────────────────────────────────────────────────
     shared = SharedState()
     stop_event = threading.Event()
@@ -145,18 +232,27 @@ def main() -> None:
     print("[arcade] threads started — launching game window")
 
     # ── Game (vendored arcade engine), driven by the real laser ────────────────
-    app = GameApp(registry={"thief": create_thief}, windowed=not args.fullscreen)
+    # Wrap each game factory so the operator can zero the laser aim live with the
+    # arrow keys; the menu launches these same wrapped factories.
+    def _wrap(factory):
+        return lambda app: AimNudgeScene(app, factory(app), calibration)
+
+    registry = {name: _wrap(f) for name, f in GAME_FACTORIES.items()}
+
+    app = GameApp(registry=registry, windowed=not args.fullscreen)
     app.pointer_source = LaserPointer(shared, cfg.LASER_STALE_SECS)
 
     # Hide the OS mouse cursor. On the projector it would otherwise be projected
     # and filmed by the camera, where the bright arrow can trigger false laser
     # detections that yank the spotlight to screen-centre. The laser is the only
     # input here, so the cursor serves no purpose.
-    import pygame
     pygame.mouse.set_visible(False)
 
+    # Launch a game directly, or show the laser-pickable menu (dwell to select).
+    start = registry[args.game](app) if args.game else MenuScene(app)
+
     try:
-        app.run(create_thief(app))
+        app.run(start)
     finally:
         print("[arcade] shutting down threads…")
         stop_event.set()
