@@ -27,15 +27,22 @@ from .constants import (
     CATCH_HOLD_SECS,
     CATCH_RADIUS,
     CELL_TRANSITION_SECS,
+    DOOR_COMMIT_DIST,
+    DOOR_GUARD_PENALTY,
+    DOOR_GUARD_RADIUS,
+    DOOR_ROUTE_PENALTY,
+    DOOR_ROUTE_RADIUS,
+    DOOR_SWITCH_HYSTERESIS,
     ESCAPE_SPEED_MULT,
     NO_LASER,
+    THIEF_ANIM_FPS,
     THIEF_H,
     THIEF_W,
     TREASURE_H,
     TREASURE_W,
 )
 from .maze import Maze
-from .pathfinding import find_path, get_next_step
+from .pathfinding import _manhattan, find_path, get_next_step
 
 # Phase enum
 class Phase(StrEnum):
@@ -60,7 +67,10 @@ class Thief:
     def __init__(self, maze: Maze, spawn_pos: tuple[int, int] | None = None):
         self.maze = maze
         self.spawn_pos = spawn_pos or maze.spawn
-        self.escape_goal: tuple[int, int] | None = None  # Door to escape through
+        self.escape_goal: tuple[int, int] | None = None  # Door currently headed for
+        self.escape_doors: list[tuple[int, int]] = []    # All candidate escape doors
+        self._shared_prefix: set[tuple[int, int]] = set()  # Trunk shared by both doors
+        self._escape_locked: bool = False                # Door choice committed?
         self.cell: tuple[int, int] = self.spawn_pos
         self.next_cell: tuple[int, int] = self.spawn_pos
         self.transition_t: float = 0.0
@@ -72,6 +82,12 @@ class Thief:
         self.phase: Phase = Phase.TREASURE
         self.path: list[tuple[int, int]] = []  # Current planned path
         self._replan_needed: bool = True
+
+        # Walk animation (sprite sheet frames assigned by the game; may be empty).
+        self.walk_frames: list[pygame.Surface] = []
+        self._anim_t: float = 0.0
+        self._anim_index: int = 0
+        self._facing_left: bool = False
 
     # ── Update ────────────────────────────────────────────────────────────────
     def update(
@@ -106,6 +122,23 @@ class Thief:
                 self.next_cell = next_step
                 self.transition_t = 0.0
             # else: stay put (at goal or no path)
+
+        # 1b) walk-cycle animation — advance frames only while actually moving.
+        if self.walk_frames:
+            if self.cell != self.next_cell:
+                dc = self.next_cell[1] - self.cell[1]
+                if dc < 0:
+                    self._facing_left = True
+                elif dc > 0:
+                    self._facing_left = False
+                self._anim_t += dt
+                frame_secs = 1.0 / max(1, THIEF_ANIM_FPS)
+                while self._anim_t >= frame_secs:
+                    self._anim_t -= frame_secs
+                    self._anim_index = (self._anim_index + 1) % len(self.walk_frames)
+            else:
+                self._anim_index = min(1, len(self.walk_frames) - 1)  # neutral pose
+                self._anim_t = 0.0
 
         # 2) catch-progress
         if laser_active and laser_pos is not None:
@@ -143,8 +176,84 @@ class Thief:
             return self.escape_goal if self.escape_goal else self.spawn_pos
 
     def set_escape_goal(self, door_pos: tuple[int, int]) -> None:
-        """Set the door position the thief must escape through."""
+        """Set a single fixed door (used for the spawn fallback)."""
         self.escape_goal = door_pos
+        self.escape_doors = [door_pos]
+        self._escape_locked = True
+
+    def set_escape_doors(self, doors: list[tuple[int, int]]) -> None:
+        """Give the thief the candidate escape doors to choose between.
+
+        The thief heads for whichever is currently safest while it is still on the
+        trunk shared by both routes, then commits once the routes fork (see
+        `_choose_escape_door`). Call this once, at the moment of capture.
+        """
+        self.escape_doors = list(doors)
+        self._escape_locked = False
+        # The shared trunk = cells common to the start of every door's clean path.
+        paths = [find_path(self.cell, d, self.maze.is_wall, self.maze.in_bounds)
+                 for d in self.escape_doors]
+        paths = [p for p in paths if p]
+        self._shared_prefix = self._common_prefix(paths)
+        # Initial pick (no laser yet): the nearest door.
+        self._choose_escape_door(None)
+
+    @staticmethod
+    def _common_prefix(paths: list[list[tuple[int, int]]]) -> set[tuple[int, int]]:
+        """Cells shared by the start of every path (the route trunk)."""
+        if not paths:
+            return set()
+        prefix: set[tuple[int, int]] = set()
+        for cells in zip(*paths):
+            if all(c == cells[0] for c in cells):
+                prefix.add(cells[0])
+            else:
+                break
+        return prefix
+
+    def _steps_to(self, goal: tuple[int, int]) -> int:
+        """Walk-distance (cells) from the thief's current cell to `goal`."""
+        path = find_path(self.cell, goal, self.maze.is_wall, self.maze.in_bounds)
+        return (len(path) - 1) if path else 10 ** 6
+
+    def _choose_escape_door(self, laser_cell: tuple[int, int] | None) -> None:
+        """Pick the safest reachable door and store it in `self.escape_goal`.
+
+        Score = route length + a penalty if the laser guards the door or blocks the
+        route ahead. Lower is safer. Hysteresis keeps the thief from flip-flopping:
+        a rival door must beat the current one by more than DOOR_SWITCH_HYSTERESIS.
+        """
+        reachable = [d for d in self.escape_doors if self.can_reach(d)]
+        if not reachable:
+            self.escape_goal = self.spawn_pos  # safety: spawn is always reachable
+            return
+
+        scores: dict[tuple[int, int], int] = {}
+        for d in reachable:
+            path = find_path(self.cell, d, self.maze.is_wall, self.maze.in_bounds)
+            if not path:
+                continue
+            score = len(path)
+            if laser_cell is not None:
+                if _manhattan(laser_cell, d) <= DOOR_GUARD_RADIUS:
+                    score += DOOR_GUARD_PENALTY
+                nearest_on_route = min(_manhattan(laser_cell, c) for c in path)
+                if nearest_on_route <= DOOR_ROUTE_RADIUS:
+                    score += DOOR_ROUTE_PENALTY * (DOOR_ROUTE_RADIUS - nearest_on_route + 1)
+            scores[d] = score
+
+        if not scores:
+            self.escape_goal = self.spawn_pos
+            return
+
+        # Deterministic challenger: lowest score, ties broken by cell order.
+        challenger = min(scores, key=lambda d: (scores[d], d))
+        current = self.escape_goal if self.escape_goal in scores else None
+        if current is None:
+            self.escape_goal = challenger
+        elif challenger != current and scores[challenger] < scores[current] - DOOR_SWITCH_HYSTERESIS:
+            self.escape_goal = challenger
+        # otherwise keep the current door (hysteresis)
 
     def can_reach(self, target: tuple[int, int]) -> bool:
         """True if a walkable path exists from the thief's current cell to target.
@@ -164,10 +273,24 @@ class Thief:
                 # Cell not in path, need to replan
                 pass
 
+        # During escape, decide which door to head for (until the choice locks).
+        if self.phase == Phase.ESCAPE and self.escape_doors and not self._escape_locked:
+            self._choose_escape_door(laser_cell)
+            # Lock once we leave the shared trunk (past the fork) or close in on a
+            # door — this kills any endgame flip-flop and gives a real catch window.
+            if (self.cell not in self._shared_prefix
+                    or self._steps_to(self.escape_goal) <= DOOR_COMMIT_DIST):
+                self._escape_locked = True
+
         # Replan path
         goal = self._get_goal()
         if self.cell == goal:
             return None
+
+        # On the final approach to the door, drop laser-avoidance: a laser parked on
+        # the door cell must not make the thief refuse the last step (never escaping).
+        near_goal = self.phase == Phase.ESCAPE and self._steps_to(goal) <= DOOR_COMMIT_DIST
+        avoid = None if near_goal else laser_cell
 
         # Try with laser avoidance first
         next_step = get_next_step(
@@ -175,11 +298,11 @@ class Thief:
             goal,
             self.maze.is_wall,
             self.maze.in_bounds,
-            avoid_pos=laser_cell,
+            avoid_pos=avoid,
         )
 
         # Fallback: try without laser avoidance if stuck
-        if next_step is None and laser_cell is not None:
+        if next_step is None and avoid is not None:
             next_step = get_next_step(
                 self.cell,
                 goal,
@@ -193,6 +316,7 @@ class Thief:
         # Spawn is always reachable from the treasure where the escape begins.
         if next_step is None and self.phase == Phase.ESCAPE and goal != self.spawn_pos:
             self.escape_goal = self.spawn_pos
+            self._escape_locked = True
             next_step = get_next_step(
                 self.cell,
                 self.spawn_pos,
@@ -210,6 +334,12 @@ class Thief:
             self.spawn_pos = new_spawn
 
         self.escape_goal = None
+        self.escape_doors = []
+        self._shared_prefix = set()
+        self._escape_locked = False
+        self._anim_t = 0.0
+        self._anim_index = 0
+        self._facing_left = False
         self.cell = self.spawn_pos
         self.next_cell = self.spawn_pos
         self.transition_t = 0.0
@@ -226,9 +356,18 @@ class Thief:
     def draw(self, surface: pygame.Surface) -> None:
         """Render the thief body. Catch ring is drawn separately (above overlay).
 
-        To use art instead of the rectangle: load a PNG with AssetLoader in
-        game.py and blit it centered on self.pos here (see games/thief/DESIGN.md).
+        Uses the walking sprite sheet (frames assigned by game.py) when available,
+        animated by `_anim_index` and mirrored by `_facing_left`. Falls back to a
+        plain rectangle if no art is loaded.
         """
+        if self.walk_frames:
+            frame = self.walk_frames[self._anim_index]
+            if self._facing_left:
+                frame = pygame.transform.flip(frame, True, False)
+            rect = frame.get_rect(center=(int(self.pos[0]), int(self.pos[1])))
+            surface.blit(frame, rect.topleft)
+            return
+
         rect = pygame.Rect(
             int(self.pos[0] - THIEF_W / 2),
             int(self.pos[1] - THIEF_H / 2),

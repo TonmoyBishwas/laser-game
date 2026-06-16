@@ -30,6 +30,8 @@ from .constants import (
     CELL_H,
     CELL_W,
     DOOR_H,
+    DOOR_MIN_PAIR_DIST,
+    DOOR_MIN_TREASURE_DIST,
     DOOR_W,
     EDGE_GLOW_BASE,
     EDGE_GLOW_DEPTH,
@@ -38,14 +40,18 @@ from .constants import (
     GAME_W,
     GRID_COLS,
     GRID_ROWS,
+    NUM_DOORS,
     ROUND_TIMEOUT_SECS,
     SPOTLIGHT_FADE_SECS,
     SPOTLIGHT_RADIUS,
+    THIEF_DRAW_H,
+    THIEF_FRAMES,
     TREASURE_H,
     TREASURE_W,
 )
 from .maze import Maze
 from .maze_layouts import DEFAULT, random_layout
+from .pathfinding import bfs_distances
 from .thief import Phase, Thief
 
 # ── Colours (all green-free; green belongs to the laser) ────────────────────────
@@ -85,6 +91,9 @@ class ThiefGame(Scene):
         self.background_img: pygame.Surface | None = None
         self.treasure_img: pygame.Surface | None = None
         self.treasure_stolen_img: pygame.Surface | None = None
+        self.treasure_thief_img: pygame.Surface | None = None
+        self.wall_img: pygame.Surface | None = None
+        self.thief_frames: list[pygame.Surface] = []
         self._load_assets()
 
         # Game state
@@ -97,7 +106,7 @@ class ThiefGame(Scene):
         self.door_visible: bool = False
         self.door_img: pygame.Surface | None = None
         self.use_random_mazes: bool = True  # Set to False to use DEFAULT layout
-        self.num_doors: int = 4  # Number of escape doors to generate
+        self.num_doors: int = NUM_DOORS  # Number of escape doors to place
 
         self._spotlight = _build_spotlight_surf(SPOTLIGHT_RADIUS)
         self._overlay = pygame.Surface((GAME_W, GAME_H), pygame.SRCALPHA)
@@ -134,6 +143,37 @@ class ThiefGame(Scene):
         except Exception:
             self.treasure_stolen_img = None
 
+        # The bare treasure the thief carries away during the escape.
+        try:
+            self.treasure_thief_img = self._assets.load_image("treasure_thief.png", size=(TREASURE_W, TREASURE_H))
+        except Exception:
+            self.treasure_thief_img = None
+
+        # Wall tile — drawn once per wall cell, sized to fill a grid cell exactly.
+        try:
+            self.wall_img = self._assets.load_image("wall_tile.png", size=(CELL_W, CELL_H))
+        except Exception:
+            self.wall_img = None  # Fallback to drawn rectangles
+
+        # Thief walking sprite sheet — a row of THIEF_FRAMES poses, sliced + scaled.
+        self.thief_frames = self._load_thief_frames()
+
+    def _load_thief_frames(self) -> list[pygame.Surface]:
+        """Slice Thief.png (a row of THIEF_FRAMES poses) into scaled walk frames."""
+        try:
+            sheet = self._assets.load_image("Thief.png")  # full sheet, unscaled
+            sw, sh = sheet.get_size()
+            fw = sw // THIEF_FRAMES
+            scale = THIEF_DRAW_H / sh
+            draw_w = max(1, int(fw * scale))
+            frames = []
+            for i in range(THIEF_FRAMES):
+                sub = sheet.subsurface(pygame.Rect(i * fw, 0, fw, sh)).copy()
+                frames.append(pygame.transform.smoothscale(sub, (draw_w, THIEF_DRAW_H)))
+            return frames
+        except Exception:
+            return []  # Fallback: thief draws its placeholder rectangle
+
     # ── Setup helpers ───────────────────────────────────────────────────────
     def _generate_maze(self) -> list[list[Any]]:
         """Generate a maze layout (random or default)."""
@@ -149,13 +189,14 @@ class ThiefGame(Scene):
         """
         Pick spawn, treasure, and door positions from a grid.
         Returns (spawn, treasure, doors) as tuples of (row, col).
-        For DEFAULT layout, reads the 'S' and 'T' markers.
-        For random grids, picks random open cells.
+
+        Spawn/treasure come from the 'S'/'T' markers (or random open cells if a grid
+        somehow lacks them). Doors are always (re)computed by `_far_doors` so they sit
+        far from the treasure and far from each other — any 'D' markers in the grid are
+        ignored (they stay as ordinary walkable cells).
         """
-        # Check if grid has explicit S/T/D markers
         spawn = None
         treasure = None
-        doors = []
         open_cells = []
 
         for r in range(GRID_ROWS):
@@ -165,8 +206,6 @@ class ThiefGame(Scene):
                     spawn = (r, c)
                 elif val == 'T':
                     treasure = (r, c)
-                elif val == 'D':
-                    doors.append((r, c))
                 elif val == 0:
                     open_cells.append((r, c))
 
@@ -184,16 +223,64 @@ class ThiefGame(Scene):
         if treasure is None:
             treasure = (1, GRID_COLS // 2)
 
-        # If no doors in grid, add random doors for DEFAULT layout
-        if not doors and grid != DEFAULT:
-            available_for_doors = [(r, c) for r in range(1, GRID_ROWS - 1)
-                                   for c in range(1, GRID_COLS - 1)
-                                   if grid[r][c] == OPEN and (r, c) != spawn and (r, c) != treasure]
-            doors_to_add = min(self.num_doors, len(available_for_doors))
-            if doors_to_add > 0:
-                doors = random.sample(available_for_doors, doors_to_add)
-
+        doors = self._far_doors(grid, spawn, treasure)
         return spawn, treasure, doors
+
+    def _far_doors(self, grid: list[list[Any]], spawn: tuple[int, int],
+                   treasure: tuple[int, int]) -> list[tuple[int, int]]:
+        """Place two escape doors physically far from the treasure and from each other.
+
+        Distances are PHYSICAL grid (Manhattan) distance — what the player sees on
+        screen — so two doors separated by a wall but touching on screen still count as
+        too close. BFS is used only to confirm a cell is reachable (a path exists);
+        unreachable cells can't be escape doors. Thresholds relax progressively so even
+        small/open mazes still yield two well-separated doors.
+        """
+        def in_bounds(r: int, c: int) -> bool:
+            return 0 <= r < GRID_ROWS and 0 <= c < GRID_COLS
+
+        def is_wall(r: int, c: int) -> bool:
+            return (not in_bounds(r, c)) or grid[r][c] == 1
+
+        def degree(cell: tuple[int, int]) -> int:
+            r, c = cell
+            return sum(1 for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1))
+                       if in_bounds(r + dr, c + dc) and not is_wall(r + dr, c + dc))
+
+        def mh(a: tuple[int, int], b: tuple[int, int]) -> int:
+            return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+        reachable = [c for c in bfs_distances(treasure, is_wall, in_bounds)
+                     if c not in (spawn, treasure)]
+        if len(reachable) < 2:
+            return reachable or [spawn]
+
+        # Try strict spacing first; relax both gates if the maze is too cramped.
+        for min_t, min_pair in ((DOOR_MIN_TREASURE_DIST, DOOR_MIN_PAIR_DIST),
+                                 (DOOR_MIN_TREASURE_DIST - 2, DOOR_MIN_PAIR_DIST - 2),
+                                 (3, 4), (2, 3), (1, 1)):
+            cand = [c for c in reachable if mh(c, treasure) >= min_t and degree(c) >= 2]
+            if len(cand) < 2:
+                cand = [c for c in reachable if mh(c, treasure) >= min_t]  # allow dead-ends
+            if len(cand) < 2:
+                continue
+            # Door A: farthest from the treasure. Door B: far from BOTH the treasure and
+            # door A (maximize the smaller gap), and at least min_pair from door A.
+            door_a = max(cand, key=lambda c: (mh(c, treasure), c))
+            bpool = [c for c in cand if c != door_a and mh(c, door_a) >= min_pair]
+            if not bpool:
+                continue
+            door_b = max(bpool, key=lambda c: (min(mh(c, treasure), mh(c, door_a)), c))
+            return [door_a, door_b]
+
+        # Fallback: the reachable pair that is most spread out overall.
+        best, best_gap = None, -1
+        for i, a in enumerate(reachable):
+            for b in reachable[i + 1:]:
+                gap = min(mh(a, treasure), mh(b, treasure), mh(a, b))
+                if gap > best_gap:
+                    best, best_gap = (a, b), gap
+        return list(best) if best else reachable[:2]
 
     def _build_maze_surface(self) -> pygame.Surface:
         surf = pygame.Surface((GAME_W, GAME_H))
@@ -202,14 +289,17 @@ class ThiefGame(Scene):
             surf.blit(self.background_img, (0, 0))
         else:
             surf.fill(BG_COLOR)
-        pad = 4
         for r in range(GRID_ROWS):
             for c in range(GRID_COLS):
                 if self.maze.is_wall(r, c):
-                    rect = pygame.Rect(c * CELL_W + pad, r * CELL_H + pad,
-                                       CELL_W - 2 * pad, CELL_H - 2 * pad)
-                    pygame.draw.rect(surf, WALL_INNER_COLOR, rect)
-                    pygame.draw.rect(surf, WALL_COLOR, rect, width=3)
+                    if self.wall_img is not None:
+                        surf.blit(self.wall_img, (c * CELL_W, r * CELL_H))
+                    else:
+                        pad = 4
+                        rect = pygame.Rect(c * CELL_W + pad, r * CELL_H + pad,
+                                           CELL_W - 2 * pad, CELL_H - 2 * pad)
+                        pygame.draw.rect(surf, WALL_INNER_COLOR, rect)
+                        pygame.draw.rect(surf, WALL_COLOR, rect, width=3)
         return surf
 
     # ── Input (operator only) ─────────────────────────────────────────────────
@@ -239,8 +329,9 @@ class ThiefGame(Scene):
         self.active_escape_door = None
         self.maze_surface = self._build_maze_surface()
 
-        # Create thief with spawn position
+        # Create thief with spawn position, and give it the walking sprite frames.
         self.thief = Thief(self.maze, spawn_pos=spawn)
+        self.thief.walk_frames = self.thief_frames
 
         # Load door image (cached, will show placeholder if missing)
         self.door_img = self._assets.load_image("door.png", size=(DOOR_W, DOOR_H))
@@ -273,7 +364,11 @@ class ThiefGame(Scene):
             laser_cell = self.maze.pixel_to_cell(self.spot_pos[0], self.spot_pos[1])
 
         self.elapsed += dt
-        self.thief.update(dt, self.spot_pos if laser_active else None, laser_active, laser_cell)
+        # Freeze the thief while the capture flash is playing, so it doesn't
+        # dart away under cover of the screen flash. It resumes once the flash
+        # has fully faded.
+        if self.capture_flash_alpha <= 0:
+            self.thief.update(dt, self.spot_pos if laser_active else None, laser_active, laser_cell)
 
         # Check for treasure reached - switch to escape phase
         if self.thief.reached_treasure and not self.door_visible:
@@ -282,19 +377,16 @@ class ThiefGame(Scene):
             self.capture_flash_alpha = 255.0  # Start flash effect
             self.screen_shake = 10.0  # Screen shake magnitude
 
-            # Pick a random door the thief can actually reach. Random mazes only
-            # guarantee spawn<->treasure connectivity, so a door can be walled off;
-            # escaping to an unreachable door would leave the thief frozen. Fall
-            # back to spawn, which is always reachable from the treasure.
-            if self.door_positions:
-                import random
-                reachable = [d for d in self.door_positions if self.thief.can_reach(d)]
-                self.active_escape_door = random.choice(reachable) if reachable else self.spawn_pos
-                self.thief.set_escape_goal(self.active_escape_door)
+            # Hand the thief every door it can actually reach and let it choose
+            # adaptively (see Thief.set_escape_doors). Random mazes only guarantee
+            # spawn<->treasure connectivity, so a door can be walled off; if none are
+            # reachable, fall back to spawn, which always is.
+            reachable = [d for d in self.door_positions if self.thief.can_reach(d)]
+            if reachable:
+                self.thief.set_escape_doors(reachable)
             else:
-                # Fallback to spawn position if no doors
-                self.active_escape_door = self.spawn_pos
                 self.thief.set_escape_goal(self.spawn_pos)
+            self.active_escape_door = self.thief.escape_goal
 
         # Update visual effects
         if self.capture_flash_alpha > 0:
@@ -306,6 +398,10 @@ class ThiefGame(Scene):
             self.screen_shake -= dt * 20  # Reduce shake
             if self.screen_shake < 0:
                 self.screen_shake = 0
+
+        # Keep the displayed active door in sync with the thief's live choice.
+        if self.door_visible and self.thief.escape_goal is not None:
+            self.active_escape_door = self.thief.escape_goal
 
         # End conditions
         if self.thief.caught:
@@ -332,7 +428,7 @@ class ThiefGame(Scene):
             self.thief.draw(temp_surface)
             # Draw stolen treasure on thief during escape
             if self.door_visible:
-                self.thief.draw_stolen_treasure(temp_surface, self.treasure_stolen_img)
+                self.thief.draw_stolen_treasure(temp_surface, self.treasure_thief_img)
             self._draw_overlay(temp_surface)
             self._draw_treasure(temp_surface)
             self._draw_door(temp_surface)
@@ -345,7 +441,7 @@ class ThiefGame(Scene):
             self.thief.draw(surface)
             # Draw stolen treasure on thief during escape
             if self.door_visible:
-                self.thief.draw_stolen_treasure(surface, self.treasure_stolen_img)
+                self.thief.draw_stolen_treasure(surface, self.treasure_thief_img)
             self._draw_overlay(surface)
             self._draw_treasure(surface)
             self._draw_door(surface)
@@ -404,13 +500,15 @@ class ThiefGame(Scene):
         surface.blit(self._overlay, (0, 0))
 
     def _draw_treasure(self, surface: pygame.Surface) -> None:
-        # Treasure disappears after thief grabs it
-        if self.door_visible:
-            return
-
         cx, cy = self.maze.cell_center(*self.maze.treasure)
         rect = pygame.Rect(int(cx - TREASURE_W // 2), int(cy - TREASURE_H // 2),
                            TREASURE_W, TREASURE_H)
+
+        # After the theft, the pedestal shows the empty display case.
+        if self.door_visible:
+            if self.treasure_stolen_img is not None:
+                surface.blit(self.treasure_stolen_img, rect.topleft)
+            return
 
         if self.treasure_img is not None:
             # Draw the treasure sprite with a pulsing glow effect
@@ -460,52 +558,31 @@ class ThiefGame(Scene):
             # Calculate glow intensity based on distance to spotlight center
             glow_intensity = 1.0 - min(1.0, dist_to_spotlight / SPOTLIGHT_RADIUS)
 
-            # Check if this is the active escape door
-            is_active_door = (door_pos == self.active_escape_door)
+            # Both doors are drawn identically: the thief's real target is hidden, so
+            # the player must read its movement rather than follow a telegraphed arrow.
+            rect = pygame.Rect(int(cx - DOOR_W // 2), int(cy - DOOR_H // 2), DOOR_W, DOOR_H)
 
             if self.door_img is not None:
-                # Draw the sprite with a glow effect
-                rect = pygame.Rect(int(cx - DOOR_W // 2), int(cy - DOOR_H // 2), DOOR_W, DOOR_H)
-
-                # Draw glow outline (pulsing) - stronger for active door
-                pulse_strength = 10 if is_active_door else 6
-                pulse = int(abs(math.sin(self.elapsed * 3)) * pulse_strength * glow_intensity)
-                glow_color = (255, 150, 50) if is_active_door else (255, 200, 100)
-                glow_rect = rect.inflate(pulse * 2, pulse * 2)
-                pygame.draw.rect(surface, glow_color, glow_rect, width=3 if is_active_door else 2, border_radius=8)
-
-                # Draw the sprite
+                # Soft elliptical halo behind the cave mouth — brighter the closer the
+                # spotlight centre is, with a gentle pulse. No hard rectangle/handle,
+                # which would look wrong on the rounded cave art.
+                pulse = 0.6 + 0.4 * abs(math.sin(self.elapsed * 3))
+                halo_alpha = int(90 * glow_intensity * pulse)
+                if halo_alpha > 4:
+                    halo = rect.inflate(40, 30)
+                    halo_surf = pygame.Surface((halo.w, halo.h), pygame.SRCALPHA)
+                    pygame.draw.ellipse(halo_surf, (255, 200, 110, halo_alpha), halo_surf.get_rect())
+                    surface.blit(halo_surf, halo.topleft)
                 surface.blit(self.door_img, rect.topleft)
-
-                # Add indicator for active door
-                if is_active_door:
-                    # Draw an arrow or indicator above the active door
-                    arrow_size = 12
-                    arrow_y = rect.top - arrow_size - 5
-                    pygame.draw.polygon(surface, (255, 100, 50), [
-                        (rect.centerx, arrow_y),
-                        (rect.centerx - arrow_size // 2, arrow_y + arrow_size),
-                        (rect.centerx + arrow_size // 2, arrow_y + arrow_size)
-                    ])
             else:
-                # Fallback: draw a placeholder door with glow
-                rect = pygame.Rect(int(cx - DOOR_W // 2), int(cy - DOOR_H // 2), DOOR_W, DOOR_H)
-                door_color = (160, 100, 60) if is_active_door else (139, 90, 50)
-                pygame.draw.rect(surface, door_color, rect, border_radius=5)
+                # Fallback placeholder if door.png is missing.
+                pygame.draw.rect(surface, (139, 90, 50), rect, border_radius=5)
                 pygame.draw.rect(surface, (100, 60, 30), rect, width=3, border_radius=5)
-
-                # Glow effect when illuminated
-                glow_size = int(12 * glow_intensity if is_active_door else 8 * glow_intensity)
+                glow_size = int(8 * glow_intensity)
                 pygame.draw.rect(surface, (255, 200, 100),
-                               rect.inflate(glow_size * 2, glow_size * 2),
-                               width=3 if is_active_door else 2, border_radius=8)
-            glow_size = int(8 * glow_intensity)
-            pygame.draw.rect(surface, (255, 200, 100),
-                           rect.inflate(glow_size * 2, glow_size * 2),
-                           width=2, border_radius=8)
-
-            # Door handle
-            pygame.draw.circle(surface, (200, 180, 100), (rect.right - 10, rect.centery), 4)
+                                 rect.inflate(glow_size * 2, glow_size * 2),
+                                 width=2, border_radius=8)
+                pygame.draw.circle(surface, (200, 180, 100), (rect.right - 10, rect.centery), 4)
 
     def _draw_edge_glow(self, surface: pygame.Surface) -> None:
         tx, ty = self.thief.pos

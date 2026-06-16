@@ -22,13 +22,41 @@ CELL_TRANSITION_SECS = 1.20    # seconds for the thief to slide one cell
 THIEF_W, THIEF_H = 60, 80
 TREASURE_W, TREASURE_H = 90, 70
 
+# Thief sprite sheet (Thief.png): a row of 3 walking poses, animated while moving.
+THIEF_FRAMES   = 3      # number of poses in the sheet
+THIEF_DRAW_H   = 118    # on-screen height (px); width follows the sprite's aspect
+THIEF_ANIM_FPS = 8      # walk-cycle speed (frames per second) while moving
+
 # ── Door (escape target) ───────────────────────────────────────────────────────────
-DOOR_W, DOOR_H = 70, 60              # On-screen size
+DOOR_W, DOOR_H = 104, 90             # On-screen size (cave-mouth art reads larger)
 DOOR_DRAW_W, DOOR_DRAW_H = 140, 120  # Artist reference (2x for crisp scaling)
 
 # ── Escape phase (after thief gets treasure) ────────────────────────────────────────
-ESCAPE_SPEED_MULT = 0.6  # Multiplier for CELL_TRANSITION_SECS (lower = faster)
-                        # 0.6 means 60% of normal time = ~1.67x faster
+ESCAPE_SPEED_MULT = 0.72  # Multiplier for CELL_TRANSITION_SECS (lower = faster).
+                          # Softened from 0.6 so the long run to a far door stays
+                          # catchable. This is the PRIMARY difficulty dial: lower it
+                          # toward 0.6 for a harder thief, raise it for an easier one.
+
+# ── Escape doors (the exits the thief races for) ────────────────────────────────────
+# Exactly two doors are placed far from the treasure and far from each other, so
+# guarding one never covers the other. While escaping, the thief picks whichever
+# door is currently safer; if the player guards a door (laser on it or its route),
+# the thief heads for the other one — then commits once past the fork between them.
+NUM_DOORS              = 2     # how many escape doors to place
+# Door spacing is measured as PHYSICAL grid distance (Manhattan), not path distance:
+# the player sees a door's on-screen position, so two doors on opposite sides of a
+# wall (long path, but touching on screen) must still count as "too close".
+DOOR_MIN_TREASURE_DIST = 6     # min grid cells between the treasure and each door
+DOOR_MIN_PAIR_DIST     = 6     # min grid cells between the two doors (so one spotlight
+                               # can't cover both and the player must commit/chase)
+DOOR_GUARD_RADIUS      = 2     # laser within this many cells of a door => "guarded"
+DOOR_GUARD_PENALTY     = 50    # score penalty for a guarded door (finite, so two
+                               # guarded doors still compare instead of both = inf)
+DOOR_ROUTE_RADIUS      = 1     # laser this close to the route ahead => "blocked"
+DOOR_ROUTE_PENALTY     = 8     # per-cell-closeness penalty for a blocked route
+DOOR_SWITCH_HYSTERESIS = 6     # a rival door must beat the current one by MORE than
+                               # this to trigger a switch (prevents flip-flop)
+DOOR_COMMIT_DIST       = 3     # within this many cells of a door, lock the choice
 
 # ── Catch mechanic (hold the pointer on the thief) ───────────────────────────────
 CATCH_HOLD_SECS   = 1.0       # how long the pointer must stay on the thief

@@ -6,6 +6,7 @@ The thief can avoid the laser pointer by penalizing cells near it.
 """
 
 import heapq
+from collections import deque
 from typing import Callable
 
 from .maze import ACTION_VECS, N, E, S, W
@@ -13,6 +14,31 @@ from .maze import ACTION_VECS, N, E, S, W
 # Heuristic: Manhattan distance
 def _manhattan(a: tuple[int, int], b: tuple[int, int]) -> int:
     return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+
+def bfs_distances(
+    start: tuple[int, int],
+    is_wall: Callable[[int, int], bool],
+    in_bounds: Callable[[int, int], bool],
+) -> dict[tuple[int, int], int]:
+    """
+    Breadth-first walk-distance (in cells) from `start` to every reachable cell.
+
+    Used for placing escape doors far from the treasure and far from each other.
+    Returns a dict {cell: distance}; unreachable cells are simply absent.
+    """
+    dist: dict[tuple[int, int], int] = {start: 0}
+    queue: deque[tuple[int, int]] = deque([start])
+    while queue:
+        cur = queue.popleft()
+        for action in (N, E, S, W):
+            dr, dc = ACTION_VECS[action]
+            nxt = (cur[0] + dr, cur[1] + dc)
+            if nxt in dist or not in_bounds(*nxt) or is_wall(*nxt):
+                continue
+            dist[nxt] = dist[cur] + 1
+            queue.append(nxt)
+    return dist
 
 
 def find_path(
