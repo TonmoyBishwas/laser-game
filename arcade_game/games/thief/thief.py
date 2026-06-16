@@ -35,7 +35,7 @@ from .constants import (
     TREASURE_W,
 )
 from .maze import Maze
-from .pathfinding import get_next_step
+from .pathfinding import find_path, get_next_step
 
 # Phase enum
 class Phase(StrEnum):
@@ -146,6 +146,12 @@ class Thief:
         """Set the door position the thief must escape through."""
         self.escape_goal = door_pos
 
+    def can_reach(self, target: tuple[int, int]) -> bool:
+        """True if a walkable path exists from the thief's current cell to target.
+        Used to skip escape doors that are walled off (which would otherwise leave
+        the thief frozen with no path to its goal)."""
+        return len(find_path(self.cell, target, self.maze.is_wall, self.maze.in_bounds)) >= 1
+
     def _get_next_step(self, laser_cell: tuple[int, int] | None) -> tuple[int, int] | None:
         """Get the next cell to move toward the goal, avoiding the laser."""
         # Use existing path if available and valid
@@ -177,6 +183,19 @@ class Thief:
             next_step = get_next_step(
                 self.cell,
                 goal,
+                self.maze.is_wall,
+                self.maze.in_bounds,
+                avoid_pos=None,
+            )
+
+        # Safety net: if the goal is genuinely unreachable (e.g. an escape door
+        # walled off from the thief), retarget to spawn so it never freezes.
+        # Spawn is always reachable from the treasure where the escape begins.
+        if next_step is None and self.phase == Phase.ESCAPE and goal != self.spawn_pos:
+            self.escape_goal = self.spawn_pos
+            next_step = get_next_step(
+                self.cell,
+                self.spawn_pos,
                 self.maze.is_wall,
                 self.maze.in_bounds,
                 avoid_pos=None,

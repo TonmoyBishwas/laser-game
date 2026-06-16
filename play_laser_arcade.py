@@ -147,6 +147,14 @@ def main() -> None:
     # ── Game (vendored arcade engine), driven by the real laser ────────────────
     app = GameApp(registry={"thief": create_thief}, windowed=not args.fullscreen)
     app.pointer_source = LaserPointer(shared, cfg.LASER_STALE_SECS)
+
+    # Hide the OS mouse cursor. On the projector it would otherwise be projected
+    # and filmed by the camera, where the bright arrow can trigger false laser
+    # detections that yank the spotlight to screen-centre. The laser is the only
+    # input here, so the cursor serves no purpose.
+    import pygame
+    pygame.mouse.set_visible(False)
+
     try:
         app.run(create_thief(app))
     finally:

@@ -282,15 +282,19 @@ class ThiefGame(Scene):
             self.capture_flash_alpha = 255.0  # Start flash effect
             self.screen_shake = 10.0  # Screen shake magnitude
 
-            # Pick a random door for the thief to escape through
+            # Pick a random door the thief can actually reach. Random mazes only
+            # guarantee spawn<->treasure connectivity, so a door can be walled off;
+            # escaping to an unreachable door would leave the thief frozen. Fall
+            # back to spawn, which is always reachable from the treasure.
             if self.door_positions:
                 import random
-                self.active_escape_door = random.choice(self.door_positions)
-                # Set thief's escape goal to this door
+                reachable = [d for d in self.door_positions if self.thief.can_reach(d)]
+                self.active_escape_door = random.choice(reachable) if reachable else self.spawn_pos
                 self.thief.set_escape_goal(self.active_escape_door)
             else:
                 # Fallback to spawn position if no doors
                 self.active_escape_door = self.spawn_pos
+                self.thief.set_escape_goal(self.spawn_pos)
 
         # Update visual effects
         if self.capture_flash_alpha > 0:
