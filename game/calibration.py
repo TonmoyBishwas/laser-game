@@ -22,26 +22,35 @@ _GAME_CORNERS = np.array(
 
 
 class Calibration:
-    def __init__(self, H: np.ndarray):
+    def __init__(self, H: np.ndarray, offset: tuple[float, float] = (0.0, 0.0)):
         self._H = H
+        # Aim correction applied AFTER the homography, in game-space pixels.
+        # The homography maps the camera dot to game space; a small systematic
+        # bias still remains (slightly off-centre calibration clicks, or the
+        # bright laser bloom shifting the box centroid), which shows up as the
+        # spotlight landing a little off from where the laser actually points.
+        # This constant nudge cancels it. +x shifts the reported spot RIGHT,
+        # +y shifts it DOWN. Tunable live (arrow keys) and persisted below.
+        self.offset = (float(offset[0]), float(offset[1]))
 
     def transform(self, cx: float, cy: float) -> tuple[float, float]:
         pt = np.array([[[cx, cy]]], dtype=np.float32)
         out = cv2.perspectiveTransform(pt, self._H)[0][0]
-        return float(out[0]), float(out[1])
+        return float(out[0]) + self.offset[0], float(out[1]) + self.offset[1]
 
     def save(self, path: str = CALIBRATION_FILE) -> None:
         with open(path, "w") as f:
-            json.dump({"H": self._H.tolist()}, f, indent=2)
-        print(f"[calibration] saved -> {path}")
+            json.dump({"H": self._H.tolist(), "offset": list(self.offset)}, f, indent=2)
+        print(f"[calibration] saved -> {path}  (offset={self.offset})")
 
     @classmethod
     def load(cls, path: str = CALIBRATION_FILE) -> "Calibration":
         with open(path) as f:
             data = json.load(f)
         H = np.array(data["H"], dtype=np.float64)
-        print(f"[calibration] loaded from {path}")
-        return cls(H)
+        offset = tuple(data.get("offset", (0.0, 0.0)))  # older files have no offset
+        print(f"[calibration] loaded from {path}  (offset={offset})")
+        return cls(H, offset)
 
     @classmethod
     def load_or_run(cls, cap: cv2.VideoCapture, force: bool = False) -> "Calibration":
