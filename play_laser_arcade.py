@@ -179,6 +179,13 @@ def main() -> None:
     parser.add_argument("--no-color-gate", action="store_true", dest="no_color_gate",
                         help="disable the green-only filter (use only if a washed-out laser stops "
                              "being detected; the filter is what stops the treasure being detected)")
+    parser.add_argument("--imgsz", type=int, default=None,
+                        help="override YOLO input size (overrides the profile). Lower = much faster "
+                             "CPU inference: try 320 with --profile uni-cpu if detection is laggy "
+                             "(the model was trained at 320). 256 is faster still; 512 is sharpest.")
+    parser.add_argument("--render-fps", type=int, default=30, dest="render_fps",
+                        help="cap the game render FPS (default 30). Lower frees the CPU for the "
+                             "detector thread, so the laser tracks better on the CPU profile.")
     args = parser.parse_args()
 
     # Apply the device profile to game.config BEFORE the detector thread reads it.
@@ -188,6 +195,14 @@ def main() -> None:
     print(f"[arcade] profile='{args.profile}' -> {overrides}")
     if args.no_color_gate:
         cfg.LASER_COLOR_GATE = False
+    if args.imgsz is not None:
+        cfg.YOLO_IMGSZ = args.imgsz
+        print(f"[arcade] YOLO_IMGSZ override -> {args.imgsz}")
+    # Cap the engine render FPS so the render loop doesn't hog the CPU the
+    # detector thread needs (set on the scene module, where GameApp.run reads it).
+    import arcade.scene as _scene_mod
+    _scene_mod.TARGET_FPS = max(10, args.render_fps)
+    print(f"[arcade] render FPS cap -> {_scene_mod.TARGET_FPS}")
     if args.device is not None:
         cfg.DROIDCAM_DEVICE_INDEX = args.device
 
