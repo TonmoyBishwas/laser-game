@@ -14,24 +14,29 @@ YOLO_IMGSZ  = 640   # match training resolution for best recall; lower if FPS su
 YOLO_DEVICE = "cuda:0"
 
 # ── Laser color gate ───────────────────────────────────────────────────────────
-# The detector model fires on any bright blob, so projected game art — the gold
-# treasure (drawn over the darkness, always lit), white HUD text, the red edge
-# glow — can be mistaken for the laser and yank the spotlight away. The laser is
-# GREEN, so reject any detection box that has essentially no green pixels. Tune
-# the band below, or disable entirely with --no-color-gate if a washed-out / very
-# overexposed laser dot ever stops being detected.
+# The detector model fires on any bright blob, so bright projected art (white HUD
+# text, the red edge glow) could be mistaken for the laser. The laser is GREEN, so
+# reject any detection box that has essentially no green pixels. These thresholds
+# are deliberately LENIENT: the gate's job now is only to reject obviously-non-green
+# art, NOT to be a tight green filter. The treasure (the original reason for this
+# gate) is now hidden in the dark by the game itself, so the gate no longer has to
+# be strict — and a too-strict gate is worse than no gate, because a real laser
+# overexposes toward a white/yellow-green core and a strict gate REJECTS it on
+# borderline frames, making the spotlight flicker on/off (uncatchable). Disable
+# entirely with --no-color-gate if a washed-out laser ever still drops out.
 LASER_COLOR_GATE      = True
-GREEN_GATE_H_LO       = 45    # OpenCV hue (0-179); the 532nm laser films ~60.
-                              # Kept at 45 (not 35): bright projected GOLD is hue
-                              # ~25 but camera/JPEG chroma noise on it spills a few
-                              # pixels up toward ~35, which occasionally sneaked the
-                              # treasure past the gate. 45 leaves the laser a 15deg
-                              # margin while shutting that yellow-green tail out.
-GREEN_GATE_H_HI       = 90    # (gold/yellow ~20-30 and red ~0/179 fall outside)
-GREEN_GATE_S_MIN      = 40    # min saturation to count a pixel as green (the glow ring)
+GREEN_GATE_H_LO       = 35    # OpenCV hue (0-179); the 532nm laser films ~60 but an
+                              # overexposed dot can read down into the 35-45 range, so
+                              # keep the low edge at 35 (anything stricter clipped the
+                              # real laser and caused on/off flicker). Gold ~25 and red
+                              # ~0/179 still fall outside; and the treasure is hidden in
+                              # the dark now anyway, so it is no longer a false target.
+GREEN_GATE_H_HI       = 95    # a touch wider on the cyan side for cool/blown-out green
+GREEN_GATE_S_MIN      = 25    # min saturation (lowered: a blown-out green dot is paler)
 GREEN_GATE_V_MIN      = 40    # min brightness
 GREEN_GATE_MIN_PIXELS = 3     # need at least this many green px in the box
-GREEN_GATE_MIN_FRACTION = 0.06  # ...and they must be at least this share of the box
+GREEN_GATE_MIN_FRACTION = 0.02  # ...and only this small a share of the box (the green
+                                # halo around an overexposed white core can be thin)
 # Cap detector inference rate (fps). 0 = unlimited. On CPU-only machines a fast
 # backend (onnx/openvino) can run inference back-to-back and starve the render
 # thread of CPU; capping leaves gaps so the spotlight redraws smoothly.
@@ -48,7 +53,11 @@ CALIBRATION_FILE = os.path.join(
 # ── Spotlight ──────────────────────────────────────────────────────────────────
 SPOTLIGHT_RADIUS    = 160   # game pixels — generous so player can find the thief
 SPOTLIGHT_FADE_SECS = 0.3
-LASER_STALE_SECS    = 0.10
+LASER_STALE_SECS    = 0.15   # hold the last laser spot this long before the spotlight
+                             # fades. Bumped 0.10 -> 0.15 to bridge brief single-frame
+                             # detection gaps so the spotlight (and catch progress)
+                             # stays steady instead of blinking. Higher = more bridging
+                             # but more lag on fast laser moves.
 
 # ── Maze ───────────────────────────────────────────────────────────────────────
 GRID_COLS, GRID_ROWS = 15, 9
