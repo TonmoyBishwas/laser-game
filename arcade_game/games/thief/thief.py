@@ -23,6 +23,9 @@ except ImportError:
             return name
 
 from .constants import (
+    BOLT_DURATION,
+    BOLT_MIN_SECS,
+    BOLT_SPEED_MULT,
     CATCH_DECAY_RATIO,
     CATCH_HOLD_SECS,
     CATCH_RADIUS,
@@ -82,6 +85,7 @@ class Thief:
         self.phase: Phase = Phase.TREASURE
         self.path: list[tuple[int, int]] = []  # Current planned path
         self._replan_needed: bool = True
+        self._bolt_timer: float = 0.0  # >0 while panicking/sprinting from the beam
 
         # Walk animation (sprite sheet frames assigned by the game; may be empty).
         self.walk_frames: list[pygame.Surface] = []
@@ -100,8 +104,25 @@ class Thief:
         if self.caught or self.escaped:
             return
 
-        # Determine current speed based on phase
+        # Distance from the beam to the thief this frame (None if no beam). Computed
+        # once and reused for both the bolt reaction and the catch progress below.
+        beam_dist = None
+        if laser_active and laser_pos is not None:
+            beam_dist = math.hypot(self.pos[0] - laser_pos[0], self.pos[1] - laser_pos[1])
+        lit = beam_dist is not None and beam_dist < CATCH_RADIUS
+
+        # Bolt: while the beam is on it, the thief panics and sprints to shake your
+        # aim; the timer lets the sprint linger briefly after the beam slips off.
+        if lit:
+            self._bolt_timer = BOLT_DURATION
+        else:
+            self._bolt_timer = max(0.0, self._bolt_timer - dt)
+
+        # Determine current speed based on phase, then apply the bolt sprint (floored
+        # so it stays catchable even stacked on the escape speed-up).
         current_transition_secs = CELL_TRANSITION_SECS * ESCAPE_SPEED_MULT if self.phase == Phase.ESCAPE else CELL_TRANSITION_SECS
+        if self._bolt_timer > 0.0:
+            current_transition_secs = max(BOLT_MIN_SECS, current_transition_secs * BOLT_SPEED_MULT)
 
         # 1) advance cell-to-cell animation
         if self.cell != self.next_cell:
@@ -132,7 +153,9 @@ class Thief:
                 elif dc > 0:
                     self._facing_left = False
                 self._anim_t += dt
-                frame_secs = 1.0 / max(1, THIEF_ANIM_FPS)
+                # Legs churn faster while bolting, so the panic sprint reads clearly.
+                anim_fps = THIEF_ANIM_FPS * (1.7 if self._bolt_timer > 0.0 else 1.0)
+                frame_secs = 1.0 / max(1.0, anim_fps)
                 while self._anim_t >= frame_secs:
                     self._anim_t -= frame_secs
                     self._anim_index = (self._anim_index + 1) % len(self.walk_frames)
@@ -140,13 +163,9 @@ class Thief:
                 self._anim_index = min(1, len(self.walk_frames) - 1)  # neutral pose
                 self._anim_t = 0.0
 
-        # 2) catch-progress
-        if laser_active and laser_pos is not None:
-            dist = math.hypot(self.pos[0] - laser_pos[0], self.pos[1] - laser_pos[1])
-            if dist < CATCH_RADIUS:
-                self.catch_progress += dt / CATCH_HOLD_SECS
-            else:
-                self.catch_progress -= dt / CATCH_HOLD_SECS * CATCH_DECAY_RATIO
+        # 2) catch-progress (uses the beam distance computed at the top of update)
+        if lit:
+            self.catch_progress += dt / CATCH_HOLD_SECS
         else:
             self.catch_progress -= dt / CATCH_HOLD_SECS * CATCH_DECAY_RATIO
 
@@ -337,6 +356,7 @@ class Thief:
         self.escape_doors = []
         self._shared_prefix = set()
         self._escape_locked = False
+        self._bolt_timer = 0.0
         self._anim_t = 0.0
         self._anim_index = 0
         self._facing_left = False

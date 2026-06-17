@@ -59,9 +59,22 @@ DOOR_SWITCH_HYSTERESIS = 6     # a rival door must beat the current one by MORE 
 DOOR_COMMIT_DIST       = 3     # within this many cells of a door, lock the choice
 
 # ── Catch mechanic (hold the pointer on the thief) ───────────────────────────────
-CATCH_HOLD_SECS   = 1.0       # how long the pointer must stay on the thief
-CATCH_RADIUS      = 100       # px — slightly smaller than SPOTLIGHT_RADIUS
-CATCH_DECAY_RATIO = 0.5       # how fast progress drains when the pointer leaves
+CATCH_HOLD_SECS   = 1.8       # cumulative secs of aim to catch (was 1.0). The thief
+                              # now bolts when lit, so the catch needs a real window.
+CATCH_RADIUS      = 100       # px — slightly smaller than SPOTLIGHT_RADIUS (kept
+                              # generous on purpose: the real laser is shaky)
+CATCH_DECAY_RATIO = 0.9       # how fast progress drains when the beam slips off (was
+                              # 0.5). Higher = a juke/dropout costs you more, so you
+                              # must track the bolting thief, not just tag it once.
+
+# ── Bolt (the thief panics and sprints while the flashlight is on it) ───────────────
+# Catching used to be "park the beam on the thief for a second." Now the instant the
+# beam lands on it, the thief speed-bursts to break your aim — every catch becomes a
+# short chase. Primary dial for THIS feature: lower BOLT_SPEED_MULT = harder to track.
+BOLT_SPEED_MULT = 0.5         # multiplies the cell-crossing time while lit (lower = faster)
+BOLT_MIN_SECS   = 0.5         # floor on cell-crossing time so the bolt never gets absurd
+                              # (keeps it catchable when stacked with the escape speed-up)
+BOLT_DURATION   = 0.7         # secs the sprint lingers after the beam slips off (momentum)
 
 # ── Edge glow (hint pointing toward the thief) ───────────────────────────────────
 EDGE_GLOW_DEPTH = 60
