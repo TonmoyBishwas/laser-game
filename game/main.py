@@ -39,6 +39,15 @@ PROFILES = {
     # admits, so recall goes up without letting game art in.
     "uni":  {"YOLO_DEVICE": "intel:gpu", "YOLO_IMGSZ": 320, "YOLO_CONF": 0.10,
              "MODEL_PATH": _OPENVINO_MODEL, "DROIDCAM_DEVICE_INDEX": 2},
+    # uni-cpu = the SAME recipe flashlight_sandbox.py runs (and which detects
+    # flawlessly on the i7): the PyTorch best.pt model on the CPU at imgsz 512,
+    # NOT the OpenVINO model on the iGPU. Use this when the full game barely
+    # detects under --profile uni: the heavy 1920x1080 game render and OpenVINO
+    # inference both want the Intel iGPU and starve each other, so detection
+    # dies even though the camera is fine. Running inference on the CPU sidesteps
+    # the contention entirely. (No MODEL_PATH key -> keeps cfg's default best.pt.)
+    "uni-cpu": {"YOLO_DEVICE": "cpu", "YOLO_IMGSZ": 512, "YOLO_CONF": 0.20,
+                "DROIDCAM_DEVICE_INDEX": 2},
 }
 
 import argparse
