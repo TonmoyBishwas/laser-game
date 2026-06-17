@@ -429,8 +429,10 @@ class ThiefGame(Scene):
             # Draw stolen treasure on thief during escape
             if self.door_visible:
                 self.thief.draw_stolen_treasure(temp_surface, self.treasure_thief_img)
-            self._draw_overlay(temp_surface)
+            # Treasure is drawn BEFORE the darkness overlay, so it stays hidden in
+            # the dark and is only revealed by the spotlight — like the walls/thief.
             self._draw_treasure(temp_surface)
+            self._draw_overlay(temp_surface)
             self._draw_door(temp_surface)
             self.thief.draw_catch_ring(temp_surface)
             self._draw_edge_glow(temp_surface)
@@ -442,8 +444,10 @@ class ThiefGame(Scene):
             # Draw stolen treasure on thief during escape
             if self.door_visible:
                 self.thief.draw_stolen_treasure(surface, self.treasure_thief_img)
-            self._draw_overlay(surface)
+            # Treasure is drawn BEFORE the darkness overlay, so it stays hidden in
+            # the dark and is only revealed by the spotlight — like the walls/thief.
             self._draw_treasure(surface)
+            self._draw_overlay(surface)
             self._draw_door(surface)
             self.thief.draw_catch_ring(surface)
             self._draw_edge_glow(surface)
@@ -511,28 +515,12 @@ class ThiefGame(Scene):
             return
 
         if self.treasure_img is not None:
-            # Draw the treasure sprite with a pulsing glow effect
-            pulse = int(abs(math.sin(self.elapsed * 2)) * 10)
-            glow_rect = rect.inflate(pulse * 2, pulse * 2)
-
-            # Draw glow outline
-            pygame.draw.rect(surface, TREASURE_GLOW, glow_rect,
-                           width=3, border_radius=12)
-
-            # Draw the sprite
+            # Just the sprite — no glow, no label. The darkness hides it until the
+            # spotlight sweeps over it, exactly like every other object in the maze.
             surface.blit(self.treasure_img, rect.topleft)
-
-            # Optional label
-            label = self._font_small.render("TREASURE", True, (40, 30, 0))
-            surface.blit(label, (rect.centerx - label.get_width() // 2, rect.bottom + 4))
         else:
-            # Fallback to drawn treasure
+            # Fallback to a plain drawn treasure (no pulsing glow / label).
             pygame.draw.rect(surface, TREASURE_COLOR, rect, border_radius=10)
-            pulse = int(abs(math.sin(self.elapsed * 2)) * 8)
-            pygame.draw.rect(surface, TREASURE_GLOW, rect.inflate(pulse * 2, pulse * 2),
-                             width=3, border_radius=12)
-            label = self._font_small.render("TREASURE", True, (40, 30, 0))
-            surface.blit(label, (rect.centerx - label.get_width() // 2, rect.bottom + 4))
 
     def _draw_door(self, surface: pygame.Surface) -> None:
         """Draw all escape doors (visible only when in spotlight)."""
