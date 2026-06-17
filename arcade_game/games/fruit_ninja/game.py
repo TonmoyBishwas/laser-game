@@ -364,9 +364,14 @@ class FruitNinjaGame(Scene):
             if popup.alpha <= 0:
                 self.popups.remove(popup)
 
-        # Remember position for next frame's swipe segment.
+        # Remember position for next frame's swipe segment. Clear it whenever the
+        # pointer drops out (the laser blinking off the surface), so when it
+        # reappears somewhere else we don't slice along a stale segment spanning
+        # the gap — which would carve every fruit on that phantom line.
         if pointer.active:
             self.last_pointer_pos = pointer.pos
+        else:
+            self.last_pointer_pos = None
 
     def _spawn_juice(self, x: float, y: float, n: int = 14) -> None:
         """Fling a burst of juice droplets out from a slice point."""
