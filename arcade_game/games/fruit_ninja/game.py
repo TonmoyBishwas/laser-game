@@ -127,9 +127,12 @@ class Popup:
 class FruitNinjaGame(Scene):
     """Slice falling apples by swiping the pointer fast through them."""
 
-    # The engine draws the white pointer dot so the blade stays visible.
-    # (We deliberately draw no trail.)
-    show_pointer = True
+    # Do NOT let the engine paint its white pointer ring here. On the real laser
+    # rig that white light lands right on top of the green laser dot the camera is
+    # trying to read; it desaturates the dot so a colour-keyed detector starts
+    # losing the laser as the scene fills up. The physical green laser already IS
+    # the visible blade, so the marker is redundant — leave the dot uncontaminated.
+    show_pointer = False
 
     def __init__(self, app):
         super().__init__(app)

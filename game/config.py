@@ -21,7 +21,12 @@ YOLO_DEVICE = "cuda:0"
 # the band below, or disable entirely with --no-color-gate if a washed-out / very
 # overexposed laser dot ever stops being detected.
 LASER_COLOR_GATE      = True
-GREEN_GATE_H_LO       = 35    # OpenCV hue (0-179); green sits ~[35, 90]
+GREEN_GATE_H_LO       = 45    # OpenCV hue (0-179); the 532nm laser films ~60.
+                              # Kept at 45 (not 35): bright projected GOLD is hue
+                              # ~25 but camera/JPEG chroma noise on it spills a few
+                              # pixels up toward ~35, which occasionally sneaked the
+                              # treasure past the gate. 45 leaves the laser a 15deg
+                              # margin while shutting that yellow-green tail out.
 GREEN_GATE_H_HI       = 90    # (gold/yellow ~20-30 and red ~0/179 fall outside)
 GREEN_GATE_S_MIN      = 40    # min saturation to count a pixel as green (the glow ring)
 GREEN_GATE_V_MIN      = 40    # min brightness
