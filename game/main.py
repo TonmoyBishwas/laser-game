@@ -32,7 +32,12 @@ PROFILES = {
     # the 60 fps render loop (the CPU stays free). Auto-falls back to intel:cpu
     # if the iGPU isn't visible. Camera index varies per setup — override with
     # --device (was 2 last session, 0 today).
-    "uni":  {"YOLO_DEVICE": "intel:gpu", "YOLO_IMGSZ": 320, "YOLO_CONF": 0.20,
+    # YOLO_CONF lowered 0.20 -> 0.10: a dim / slightly-out-of-focus green dot
+    # scores right around 0.20, so the box flickered above/below the threshold
+    # and the spotlight blinked. 0.10 latches onto the laser far more steadily;
+    # the green colour gate rejects the extra low-confidence non-green boxes this
+    # admits, so recall goes up without letting game art in.
+    "uni":  {"YOLO_DEVICE": "intel:gpu", "YOLO_IMGSZ": 320, "YOLO_CONF": 0.10,
              "MODEL_PATH": _OPENVINO_MODEL, "DROIDCAM_DEVICE_INDEX": 2},
 }
 
