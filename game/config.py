@@ -12,6 +12,21 @@ MODEL_PATH = os.path.join(
 YOLO_CONF   = 0.25
 YOLO_IMGSZ  = 640   # match training resolution for best recall; lower if FPS suffers
 YOLO_DEVICE = "cuda:0"
+
+# ── Laser color gate ───────────────────────────────────────────────────────────
+# The detector model fires on any bright blob, so projected game art — the gold
+# treasure (drawn over the darkness, always lit), white HUD text, the red edge
+# glow — can be mistaken for the laser and yank the spotlight away. The laser is
+# GREEN, so reject any detection box that has essentially no green pixels. Tune
+# the band below, or disable entirely with --no-color-gate if a washed-out / very
+# overexposed laser dot ever stops being detected.
+LASER_COLOR_GATE      = True
+GREEN_GATE_H_LO       = 35    # OpenCV hue (0-179); green sits ~[35, 90]
+GREEN_GATE_H_HI       = 90    # (gold/yellow ~20-30 and red ~0/179 fall outside)
+GREEN_GATE_S_MIN      = 40    # min saturation to count a pixel as green (the glow ring)
+GREEN_GATE_V_MIN      = 40    # min brightness
+GREEN_GATE_MIN_PIXELS = 3     # need at least this many green px in the box
+GREEN_GATE_MIN_FRACTION = 0.06  # ...and they must be at least this share of the box
 # Cap detector inference rate (fps). 0 = unlimited. On CPU-only machines a fast
 # backend (onnx/openvino) can run inference back-to-back and starve the render
 # thread of CPU; capping leaves gaps so the spotlight redraws smoothly.

@@ -176,6 +176,9 @@ def main() -> None:
                         help="laser aim correction in game px (+x = move the spot RIGHT); persisted")
     parser.add_argument("--offset-y", type=float, default=None, dest="offset_y",
                         help="laser aim correction in game px (+y = move the spot DOWN); persisted")
+    parser.add_argument("--no-color-gate", action="store_true", dest="no_color_gate",
+                        help="disable the green-only filter (use only if a washed-out laser stops "
+                             "being detected; the filter is what stops the treasure being detected)")
     args = parser.parse_args()
 
     # Apply the device profile to game.config BEFORE the detector thread reads it.
@@ -183,6 +186,8 @@ def main() -> None:
     for k, v in overrides.items():
         setattr(cfg, k, v)
     print(f"[arcade] profile='{args.profile}' -> {overrides}")
+    if args.no_color_gate:
+        cfg.LASER_COLOR_GATE = False
     if args.device is not None:
         cfg.DROIDCAM_DEVICE_INDEX = args.device
 

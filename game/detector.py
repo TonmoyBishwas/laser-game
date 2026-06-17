@@ -18,6 +18,31 @@ from game import config as cfg
 from game.calibration import Calibration
 
 
+def _is_green_laser(frame_bgr, x1, y1, x2, y2) -> bool:
+    """True if the detection box actually contains the green laser dot.
+
+    The model fires on any bright blob, so projected game art (the gold treasure,
+    white HUD text, the red edge glow) can be detected as a laser and drag the
+    spotlight there. The laser is green, so we require the box to hold a real
+    patch of green pixels. Thresholds come from config so the band can be tuned
+    and the whole gate switched off live (cfg.LASER_COLOR_GATE / --no-color-gate).
+    """
+    h, w = frame_bgr.shape[:2]
+    xi1, yi1 = max(0, int(x1)), max(0, int(y1))
+    xi2, yi2 = min(w, int(x2) + 1), min(h, int(y2) + 1)
+    area = (xi2 - xi1) * (yi2 - yi1)
+    if area <= 0:
+        return False
+    hsv = cv2.cvtColor(frame_bgr[yi1:yi2, xi1:xi2], cv2.COLOR_BGR2HSV)
+    h_ch, s_ch, v_ch = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+    green = (
+        (h_ch >= cfg.GREEN_GATE_H_LO) & (h_ch <= cfg.GREEN_GATE_H_HI) &
+        (s_ch >= cfg.GREEN_GATE_S_MIN) & (v_ch >= cfg.GREEN_GATE_V_MIN)
+    )
+    count = int(np.count_nonzero(green))
+    return count >= cfg.GREEN_GATE_MIN_PIXELS and (count / area) >= cfg.GREEN_GATE_MIN_FRACTION
+
+
 def _resolve_device(preferred: str) -> str:
     if preferred.startswith("cuda") and not torch.cuda.is_available():
         print(f"[detector] WARNING: requested {preferred} but CUDA is unavailable; falling back to CPU")
@@ -74,9 +99,14 @@ class DetectorThread(threading.Thread):
         print(f"[detector] model loaded ({cfg.MODEL_PATH}) on {device}, "
               f"conf={cfg.YOLO_CONF}, imgsz={cfg.YOLO_IMGSZ}")
 
+        gate_on = getattr(cfg, "LASER_COLOR_GATE", True)
+        print(f"[detector] green color gate {'ON' if gate_on else 'OFF'}"
+              f"{' (rejects non-green blobs like the treasure)' if gate_on else ' (--no-color-gate)'}")
+
         last_report = time.time()
         infer_count = 0
         detect_count = 0
+        gated_count = 0   # boxes rejected this interval for not being green
 
         max_fps = getattr(cfg, "MAX_DETECT_FPS", 0) or 0
         min_interval = (1.0 / max_fps) if max_fps > 0 else 0.0
@@ -105,11 +135,24 @@ class DetectorThread(threading.Thread):
 
             boxes = results[0].boxes
             box_tuple = None
+            chosen = None   # (x1, y1, x2, y2, conf) of the accepted laser box
             if boxes is not None and len(boxes) > 0:
                 confs = boxes.conf.cpu().numpy()
-                best = int(np.argmax(confs))
-                xyxy = boxes.xyxy[best].cpu().numpy()
-                x1, y1, x2, y2 = float(xyxy[0]), float(xyxy[1]), float(xyxy[2]), float(xyxy[3])
+                xyxy_all = boxes.xyxy.cpu().numpy()
+                # Highest-confidence box first; skip any that fail the green test, so
+                # bright game art can't masquerade as the laser even when it outscores
+                # the real green dot. Without the gate, just take the top box.
+                for i in np.argsort(confs)[::-1]:
+                    bx = xyxy_all[i]
+                    x1, y1, x2, y2 = float(bx[0]), float(bx[1]), float(bx[2]), float(bx[3])
+                    if gate_on and not _is_green_laser(frame, x1, y1, x2, y2):
+                        gated_count += 1
+                        continue
+                    chosen = (x1, y1, x2, y2, float(confs[i]))
+                    break
+
+            if chosen is not None:
+                x1, y1, x2, y2, conf = chosen
                 cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
 
                 gx, gy = self._cal.transform(cx, cy)
@@ -120,7 +163,7 @@ class DetectorThread(threading.Thread):
                 with self._shared.laser_lock:
                     self._shared.laser_state = LaserState(
                         pos=(gx, gy),
-                        conf=float(confs[best]),
+                        conf=conf,
                         timestamp=time.time(),
                         camera_pos=(cx, cy),
                     )
@@ -142,11 +185,13 @@ class DetectorThread(threading.Thread):
                 print(
                     f"[detector] infer={stats.infer_fps:5.1f} fps  "
                     f"detect={stats.detect_fps:5.1f} fps  "
+                    f"gated={gated_count:3d}  "
                     f"total_frames={stats.total_frames}  "
                     f"total_detections={stats.total_detections}"
                 )
                 infer_count = 0
                 detect_count = 0
+                gated_count = 0
                 last_report = now
 
             # Throttle inference rate so it doesn't run back-to-back and starve

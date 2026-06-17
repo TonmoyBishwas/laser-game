@@ -160,6 +160,9 @@ def main() -> None:
     parser.add_argument("--policy",      type=str, default=POLICY_PATH, help="Path to Q-table NPZ")
     parser.add_argument("--profile",     type=str, default="home", choices=list(PROFILES),
                         help="'home' = CUDA + imgsz 640 + cam 0; 'uni' = CPU + imgsz 512 + cam 2")
+    parser.add_argument("--no-color-gate", action="store_true", dest="no_color_gate",
+                        help="disable the green-only laser filter (use only if a washed-out laser "
+                             "stops being detected)")
     args = parser.parse_args()
 
     # Apply the device profile BEFORE the detector thread reads cfg.YOLO_*.
@@ -167,6 +170,8 @@ def main() -> None:
     overrides = PROFILES[args.profile]
     for k, v in overrides.items():
         setattr(cfg, k, v)
+    if args.no_color_gate:
+        cfg.LASER_COLOR_GATE = False
     print(f"[main] profile='{args.profile}' -> {overrides}")
 
     if args.device is not None:
