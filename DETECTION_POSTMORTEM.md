@@ -201,6 +201,36 @@ collapsed.
 - [ ] Thief: spotlight tracks smoothly; a catch can be completed. Fruit ninja: fruits are sliceable.
 - [ ] Validated on the **uni i7** specifically (the demo machine), not just the home PC.
 
+### 2026-07-03 — Fix implemented (§7 A + fix #3)
+
+The engine optimization pass landed in the `laser-arcade` source and was re-vendored here
+(source and vendored trees were verified byte-identical beforehand, so the §8 divergence
+warning is now stale — the thief door/standstill, treasure-hide, and bolt changes are all
+committed in source).
+
+What was done:
+- **`arcade/display.py`**: the per-frame full-canvas `smoothscale` (fix §7-A-1) replaced with
+  nearest `transform.scale` into a **persistent reused buffer**; letterbox bars filled once.
+- **`games/thief/game.py`**: ESCAPE! banner pre-rendered once (was 2 new SysFonts + 37 text
+  renders per frame), edge-glow strips pre-rendered (was ~240 `draw.line` + 4 allocs/frame),
+  shake/flash/spotlight scratch surfaces allocated once, HUD phase text + end screen cached.
+- **`games/fruit_ninja/game.py`**: juice-particle dots pre-rendered per (color, radius),
+  sprites pre-rotated into 10° buckets (was `transform.rotate` per item per frame), popup /
+  HUD / game-over text cached. **`thief.py`**: walk frames pre-flipped.
+- **Detector throttle activated** (fix §7-A-3): `MAX_DETECT_FPS: 12` added to the `uni` and
+  `uni-cpu` profiles in `game/main.py`. `flashlight_sandbox.py` now imports the shared
+  PROFILES instead of a stale hand-copy.
+- Render-FPS cap: unchanged — the launcher's `--render-fps 30` default (10a0d59) already works.
+
+Measured (headless A/B, home PC, dummy video driver — pure main-thread CPU per frame, the
+exact work that holds the GIL against the detector): thief normal play 6.8 → 2.7 ms; thief
+theft-effects worst case 13.1 → 4.3 ms; fruit ninja sustained slicing 4.8 → 1.2 ms
+(**2.6–3.9× less main-thread work**). Games verified playable end-to-end headlessly
+(slices register, phases transition, all end screens render).
+
+Still open: the four checklist boxes above need a live camera + laser run — especially the
+**uni i7** one. §7-D (separate-process detector) remains deferred unless the i7 still drops.
+
 ## 10. Reflection
 
 The debugging chased symptoms instead of isolating the layer. The pipeline has three layers —

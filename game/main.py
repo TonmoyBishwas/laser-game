@@ -37,8 +37,14 @@ PROFILES = {
     # and the spotlight blinked. 0.10 latches onto the laser far more steadily;
     # the green colour gate rejects the extra low-confidence non-green boxes this
     # admits, so recall goes up without letting game art in.
+    # MAX_DETECT_FPS 12: cap inference so the detector thread sleeps between
+    # frames and releases the CPU/GIL to the render loop (and vice versa).
+    # Unlimited inference ran back-to-back and contributed to the render/
+    # detector starvation documented in DETECTION_POSTMORTEM.md. 12 fps is the
+    # sandbox's field-tested default and plenty for a smoothly-fading spotlight.
     "uni":  {"YOLO_DEVICE": "intel:gpu", "YOLO_IMGSZ": 320, "YOLO_CONF": 0.10,
-             "MODEL_PATH": _OPENVINO_MODEL, "DROIDCAM_DEVICE_INDEX": 2},
+             "MODEL_PATH": _OPENVINO_MODEL, "DROIDCAM_DEVICE_INDEX": 2,
+             "MAX_DETECT_FPS": 12},
     # uni-cpu = the SAME recipe flashlight_sandbox.py runs (and which detects
     # flawlessly on the i7): the PyTorch best.pt model on the CPU at imgsz 512,
     # NOT the OpenVINO model on the iGPU. Use this when the full game barely
@@ -47,7 +53,7 @@ PROFILES = {
     # dies even though the camera is fine. Running inference on the CPU sidesteps
     # the contention entirely. (No MODEL_PATH key -> keeps cfg's default best.pt.)
     "uni-cpu": {"YOLO_DEVICE": "cpu", "YOLO_IMGSZ": 512, "YOLO_CONF": 0.20,
-                "DROIDCAM_DEVICE_INDEX": 2},
+                "DROIDCAM_DEVICE_INDEX": 2, "MAX_DETECT_FPS": 12},
 }
 
 import argparse
@@ -173,7 +179,9 @@ def main() -> None:
     parser.add_argument("--debug",       action="store_true",    help="YOLO preview window + HUD stats + Q-bars")
     parser.add_argument("--policy",      type=str, default=POLICY_PATH, help="Path to Q-table NPZ")
     parser.add_argument("--profile",     type=str, default="home", choices=list(PROFILES),
-                        help="'home' = CUDA + imgsz 640 + cam 0; 'uni' = CPU + imgsz 512 + cam 2")
+                        help="'home' = CUDA + imgsz 640 + cam 0; "
+                             "'uni' = OpenVINO on the Intel iGPU + imgsz 320 + cam 2; "
+                             "'uni-cpu' = CPU best.pt + imgsz 512 + cam 2 (fallback)")
     parser.add_argument("--no-color-gate", action="store_true", dest="no_color_gate",
                         help="disable the green-only laser filter (use only if a washed-out laser "
                              "stops being detected)")

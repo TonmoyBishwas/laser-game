@@ -63,13 +63,11 @@ from game import capture as cap_mod
 from game import detector as det_mod
 from game.detector import DetectorStats
 
-# Same profiles as game/main.py (kept in sync by hand).
-PROFILES = {
-    "home": {"YOLO_DEVICE": "cuda:0", "YOLO_IMGSZ": 640, "YOLO_CONF": 0.25,
-             "DROIDCAM_DEVICE_INDEX": 0},
-    "uni":  {"YOLO_DEVICE": "cpu",    "YOLO_IMGSZ": 512, "YOLO_CONF": 0.20,
-             "DROIDCAM_DEVICE_INDEX": 2},
-}
+# Share the device profiles with the game so they can't drift out of sync
+# (this file used to carry a hand-copied — and stale — duplicate). Note the
+# sandbox's own --max-detect-fps flag is applied AFTER the profile, so it
+# still wins over any MAX_DETECT_FPS a profile sets.
+from game.main import PROFILES
 
 TUNING_FILE = "flashlight_tuning.json"
 
