@@ -18,6 +18,7 @@ Render order each frame:
 """
 
 import math
+import random
 from pathlib import Path
 from typing import Any
 
@@ -111,6 +112,31 @@ class ThiefGame(Scene):
         self._spotlight = _build_spotlight_surf(SPOTLIGHT_RADIUS)
         self._overlay = pygame.Surface((GAME_W, GAME_H), pygame.SRCALPHA)
 
+        # ── Per-frame scratch surfaces, allocated ONCE and reused. Allocating
+        # full-screen (or even spotlight-sized) surfaces inside draw() every
+        # frame is main-thread work that starves the detector thread in the
+        # real installation (see DETECTION_POSTMORTEM.md there).
+        self._shake_surf = pygame.Surface((GAME_W, GAME_H))
+        self._flash_surf = pygame.Surface((GAME_W, GAME_H), pygame.SRCALPHA)
+        self._spot_scratch = pygame.Surface(self._spotlight.get_size(), pygame.SRCALPHA)
+
+        # Static text rendered once (SysFont construction per frame is very
+        # expensive — the old ESCAPE! banner made 2 fonts + 37 renders a frame).
+        self._escape_banner = self._build_escape_banner()
+        self._escape_sub = pygame.font.SysFont("monospace", 28, bold=True).render(
+            "Find the door! Catch the thief!", True, (255, 200, 100))
+        self._phase_txts = {
+            True:  self._font_small.render("CATCH THE THIEF!", True, (255, 200, 100)),
+            False: self._font_small.render("STOP THE ESCAPE!", True, (255, 100, 100)),
+        }
+        self._veil = pygame.Surface((GAME_W, GAME_H), pygame.SRCALPHA)
+        self._veil.fill((0, 0, 0, 160))
+        self._end_cache: tuple | None = None   # (headline, sub, restart) built on game over
+
+        # Edge-glow gradient strips pre-rendered at full alpha; per frame we
+        # just set_alpha + blit (was: 4 surface allocs + ~240 draw.line calls).
+        self._edge_strips = self._build_edge_strips()
+
         self.elapsed = 0.0
         self.game_over = False
         self.player_won = False
@@ -174,6 +200,43 @@ class ThiefGame(Scene):
         except Exception:
             return []  # Fallback: thief draws its placeholder rectangle
 
+    def _build_escape_banner(self) -> pygame.Surface:
+        """Pre-render the pulsing "ESCAPE!" banner ONCE at its largest size
+        (pulse max = 1.2 -> 86pt) with the black outline baked in. draw() just
+        smoothscales this small surface to the current pulse size — the old
+        code built two SysFonts and did 37 text renders EVERY frame."""
+        font = pygame.font.SysFont("monospace", int(72 * 1.2), bold=True)
+        text = font.render("ESCAPE!", True, (255, 80, 80))
+        outline = font.render("ESCAPE!", True, (0, 0, 0))
+        pad = 3
+        banner = pygame.Surface((text.get_width() + 2 * pad,
+                                 text.get_height() + 2 * pad), pygame.SRCALPHA)
+        for dx in (-3, -2, -1, 1, 2, 3):
+            for dy in (-3, -2, -1, 1, 2, 3):
+                banner.blit(outline, (pad + dx, pad + dy))
+        banner.blit(text, (pad, pad))
+        return banner
+
+    def _build_edge_strips(self) -> dict[str, pygame.Surface]:
+        """Pre-render the four edge-glow gradient strips at full alpha."""
+        depth = EDGE_GLOW_DEPTH
+        strips: dict[str, pygame.Surface] = {}
+        for name in ("top", "bottom", "left", "right"):
+            if name in ("top", "bottom"):
+                strip = pygame.Surface((GAME_W, depth), pygame.SRCALPHA)
+                for i in range(depth):
+                    a = int(255 * (1 - i / depth))
+                    row = i if name == "top" else depth - 1 - i
+                    pygame.draw.line(strip, (*EDGE_GLOW_COLOR, a), (0, row), (GAME_W, row))
+            else:
+                strip = pygame.Surface((depth, GAME_H), pygame.SRCALPHA)
+                for i in range(depth):
+                    a = int(255 * (1 - i / depth))
+                    col = i if name == "left" else depth - 1 - i
+                    pygame.draw.line(strip, (*EDGE_GLOW_COLOR, a), (col, 0), (col, GAME_H))
+            strips[name] = strip
+        return strips
+
     # ── Setup helpers ───────────────────────────────────────────────────────
     def _generate_maze(self) -> list[list[Any]]:
         """Generate a maze layout (random or default)."""
@@ -211,7 +274,6 @@ class ThiefGame(Scene):
 
         # If no explicit markers, pick random positions
         if spawn is None and open_cells:
-            import random
             if len(open_cells) >= 2:
                 spawn, treasure = random.sample(open_cells, 2)
             else:
@@ -345,6 +407,7 @@ class ThiefGame(Scene):
         self.treasure_captured_time = None
         self.capture_flash_alpha = 0.0
         self.screen_shake = 0.0
+        self._end_cache = None
 
     # ── Update ────────────────────────────────────────────────────────────────
     def update(self, dt: float, pointer) -> None:
@@ -413,79 +476,49 @@ class ThiefGame(Scene):
 
     # ── Draw ────────────────────────────────────────────────────────────────
     def draw(self, surface: pygame.Surface) -> None:
-        # Apply screen shake if active
-        shake_x = 0
-        shake_y = 0
-        if self.screen_shake > 0:
-            import random
+        # While shaking, compose the scene onto the reused scratch surface and
+        # blit it at a jittered offset; otherwise draw straight to the canvas.
+        # (One shared draw path — the old code duplicated it per branch and
+        # allocated a fresh 1920x1080 surface every shake frame.)
+        shaking = self.screen_shake > 0
+        target = self._shake_surf if shaking else surface
+
+        target.blit(self.maze_surface, (0, 0))
+        self.thief.draw(target)
+        # Draw stolen treasure on thief during escape
+        if self.door_visible:
+            self.thief.draw_stolen_treasure(target, self.treasure_thief_img)
+        # Treasure is drawn BEFORE the darkness overlay, so it stays hidden in
+        # the dark and is only revealed by the spotlight — like the walls/thief.
+        self._draw_treasure(target)
+        self._draw_overlay(target)
+        self._draw_door(target)
+        self.thief.draw_catch_ring(target)
+        self._draw_edge_glow(target)
+        self._draw_hud(target)
+
+        if shaking:
             shake_x = random.uniform(-self.screen_shake, self.screen_shake)
             shake_y = random.uniform(-self.screen_shake, self.screen_shake)
+            surface.blit(target, (shake_x, shake_y))
 
-        # Create a temporary surface for the shaken view
-        if self.screen_shake > 0:
-            temp_surface = pygame.Surface((GAME_W, GAME_H))
-            temp_surface.blit(self.maze_surface, (0, 0))
-            self.thief.draw(temp_surface)
-            # Draw stolen treasure on thief during escape
-            if self.door_visible:
-                self.thief.draw_stolen_treasure(temp_surface, self.treasure_thief_img)
-            # Treasure is drawn BEFORE the darkness overlay, so it stays hidden in
-            # the dark and is only revealed by the spotlight — like the walls/thief.
-            self._draw_treasure(temp_surface)
-            self._draw_overlay(temp_surface)
-            self._draw_door(temp_surface)
-            self.thief.draw_catch_ring(temp_surface)
-            self._draw_edge_glow(temp_surface)
-            self._draw_hud(temp_surface)
-            surface.blit(temp_surface, (shake_x, shake_y))
-        else:
-            surface.blit(self.maze_surface, (0, 0))
-            self.thief.draw(surface)
-            # Draw stolen treasure on thief during escape
-            if self.door_visible:
-                self.thief.draw_stolen_treasure(surface, self.treasure_thief_img)
-            # Treasure is drawn BEFORE the darkness overlay, so it stays hidden in
-            # the dark and is only revealed by the spotlight — like the walls/thief.
-            self._draw_treasure(surface)
-            self._draw_overlay(surface)
-            self._draw_door(surface)
-            self.thief.draw_catch_ring(surface)
-            self._draw_edge_glow(surface)
-            self._draw_hud(surface)
-
-        # Draw treasure capture flash effect
+        # Draw treasure capture flash effect (reused surface, refilled per frame)
         if self.capture_flash_alpha > 0:
-            flash_surface = pygame.Surface((GAME_W, GAME_H), pygame.SRCALPHA)
-            flash_alpha = int(self.capture_flash_alpha)
-            flash_surface.fill((255, 100, 50, flash_alpha))
-            surface.blit(flash_surface, (0, 0))
+            self._flash_surf.fill((255, 100, 50, int(self.capture_flash_alpha)))
+            surface.blit(self._flash_surf, (0, 0))
 
-        # Draw "ESCAPE!" announcement
+        # Draw "ESCAPE!" announcement — pre-rendered banner, scaled to the pulse
         if self.door_visible and not self.game_over:
             time_since_capture = self.elapsed - (self.treasure_captured_time or 0)
             if time_since_capture < 3.0:  # Show for 3 seconds
-                # Pulsing "ESCAPE!" text
                 pulse = 1.0 + 0.2 * abs(math.sin(self.elapsed * 5))
-                font_size = int(72 * pulse)
-                escape_font = pygame.font.SysFont("monospace", font_size, bold=True)
-                text = escape_font.render("ESCAPE!", True, (255, 80, 80))
-                text_rect = text.get_rect(center=(GAME_W // 2, 100))
-
-                # Draw outline
-                outline_color = (0, 0, 0)
-                for dx in [-3, -2, -1, 1, 2, 3]:
-                    for dy in [-3, -2, -1, 1, 2, 3]:
-                        outline = escape_font.render("ESCAPE!", True, outline_color)
-                        surface.blit(outline, (text_rect.x + dx, text_rect.y + dy))
-
-                # Draw main text
-                surface.blit(text, text_rect)
-
-                # Draw secondary instruction
-                sub_font = pygame.font.SysFont("monospace", 28, bold=True)
-                sub_text = sub_font.render("Find the door! Catch the thief!", True, (255, 200, 100))
-                sub_rect = sub_text.get_rect(center=(GAME_W // 2, 160))
-                surface.blit(sub_text, sub_rect)
+                scale = pulse / 1.2   # banner is pre-rendered at pulse max 1.2
+                w = max(1, int(self._escape_banner.get_width() * scale))
+                h = max(1, int(self._escape_banner.get_height() * scale))
+                banner = pygame.transform.smoothscale(self._escape_banner, (w, h))
+                surface.blit(banner, banner.get_rect(center=(GAME_W // 2, 100)))
+                surface.blit(self._escape_sub,
+                             self._escape_sub.get_rect(center=(GAME_W // 2, 160)))
 
         if self.game_over:
             self._draw_end_screen(surface)
@@ -494,10 +527,16 @@ class ThiefGame(Scene):
         self._overlay.fill((0, 0, 0, OVERLAY_ALPHA_MAX))
         hole_alpha = int(self.spot_alpha)
         if hole_alpha > 5:
-            scaled = self._spotlight.copy()
-            scaled.fill((255, 255, 255, hole_alpha), special_flags=pygame.BLEND_RGBA_MULT)
+            # Rebuild the alpha-modulated spotlight in a reused scratch surface
+            # (zero-fill + additive blit copies it exactly) instead of .copy(),
+            # which allocated a new spotlight-sized surface every frame.
+            scratch = self._spot_scratch
+            scratch.fill((0, 0, 0, 0))
+            scratch.blit(self._spotlight, (0, 0), special_flags=pygame.BLEND_RGBA_ADD)
+            if hole_alpha < 255:
+                scratch.fill((255, 255, 255, hole_alpha), special_flags=pygame.BLEND_RGBA_MULT)
             self._overlay.blit(
-                scaled,
+                scratch,
                 (int(self.spot_pos[0]) - SPOTLIGHT_RADIUS, int(self.spot_pos[1]) - SPOTLIGHT_RADIUS),
                 special_flags=pygame.BLEND_RGBA_SUB,
             )
@@ -589,48 +628,45 @@ class ThiefGame(Scene):
             max_alpha = int(min(255, prox * pulse * 255))
             if max_alpha <= 0:
                 continue
-            if name in ("top", "bottom"):
-                strip = pygame.Surface((GAME_W, depth), pygame.SRCALPHA)
-                for i in range(depth):
-                    a = int(max_alpha * (1 - i / depth))
-                    row = i if name == "top" else depth - 1 - i
-                    pygame.draw.line(strip, (*EDGE_GLOW_COLOR, a), (0, row), (GAME_W, row))
-                surface.blit(strip, (0, 0 if name == "top" else GAME_H - depth))
+            # Pre-rendered gradient strip; surface alpha scales the whole
+            # gradient (multiplies with the per-pixel alpha in pygame 2).
+            strip = self._edge_strips[name]
+            strip.set_alpha(max_alpha)
+            if name == "top":
+                surface.blit(strip, (0, 0))
+            elif name == "bottom":
+                surface.blit(strip, (0, GAME_H - depth))
+            elif name == "left":
+                surface.blit(strip, (0, 0))
             else:
-                strip = pygame.Surface((depth, GAME_H), pygame.SRCALPHA)
-                for i in range(depth):
-                    a = int(max_alpha * (1 - i / depth))
-                    col = i if name == "left" else depth - 1 - i
-                    pygame.draw.line(strip, (*EDGE_GLOW_COLOR, a), (col, 0), (col, GAME_H))
-                surface.blit(strip, (0 if name == "left" else GAME_W - depth, 0))
+                surface.blit(strip, (GAME_W - depth, 0))
 
     def _draw_hud(self, surface: pygame.Surface) -> None:
         remaining = max(0.0, ROUND_TIMEOUT_SECS - self.elapsed)
         txt = self._font_med.render(f"Time: {remaining:05.1f}s", True, HUD_COLOR)
         surface.blit(txt, (20, 20))
 
-        # Show phase indicator
-        if self.thief.phase == Phase.TREASURE:
-            phase_txt = self._font_small.render("CATCH THE THIEF!", True, (255, 200, 100))
-        else:
-            phase_txt = self._font_small.render("STOP THE ESCAPE!", True, (255, 100, 100))
+        # Show phase indicator (pre-rendered — it only has two states)
+        phase_txt = self._phase_txts[self.thief.phase == Phase.TREASURE]
         surface.blit(phase_txt, (GAME_W - phase_txt.get_width() - 20, 20))
 
     def _draw_end_screen(self, surface: pygame.Surface) -> None:
-        veil = pygame.Surface((GAME_W, GAME_H), pygame.SRCALPHA)
-        veil.fill((0, 0, 0, 160))
-        surface.blit(veil, (0, 0))
-        if self.player_won:
-            headline = self._font_large.render("THIEF CAUGHT!", True, (80, 200, 255))
-            sub = self._font_med.render("Good aim. The treasure is safe.", True, (200, 235, 255))
-        else:
-            if self.thief.escaped:
+        surface.blit(self._veil, (0, 0))
+        # Render the end-screen text once when the game-over state is first
+        # drawn, then reuse (this screen shows for many frames).
+        if self._end_cache is None:
+            if self.player_won:
+                headline = self._font_large.render("THIEF CAUGHT!", True, (80, 200, 255))
+                sub = self._font_med.render("Good aim. The treasure is safe.", True, (200, 235, 255))
+            elif self.thief.escaped:
                 headline = self._font_large.render("THIEF ESCAPED!", True, (255, 80, 80))
                 sub = self._font_med.render("The thief got away with the treasure...", True, (255, 200, 200))
             else:
                 headline = self._font_large.render("TIME'S UP!", True, (255, 150, 50))
                 sub = self._font_med.render("The thief disappeared into the shadows.", True, (255, 200, 150))
-        restart = self._font_med.render("Press R to restart  |  Q to quit", True, (220, 220, 220))
+            restart = self._font_med.render("Press R to restart  |  Q to quit", True, (220, 220, 220))
+            self._end_cache = (headline, sub, restart)
+        headline, sub, restart = self._end_cache
         surface.blit(headline, (GAME_W // 2 - headline.get_width() // 2, GAME_H // 2 - 100))
         surface.blit(sub,      (GAME_W // 2 - sub.get_width() // 2,      GAME_H // 2))
         surface.blit(restart,  (GAME_W // 2 - restart.get_width() // 2,  GAME_H // 2 + 80))

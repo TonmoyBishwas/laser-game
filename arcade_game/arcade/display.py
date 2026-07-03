@@ -64,6 +64,18 @@ class Display:
         self.off_x = (self.win_w - self.draw_w) // 2
         self.off_y = (self.win_h - self.draw_h) // 2
 
+        if self.scale == 1 and self.off_x == 0 and self.off_y == 0:
+            # Window matches the canvas exactly — present() direct-blits.
+            self._scaled_buf = None
+        else:
+            # Persistent destination for the per-frame scale. Allocating this
+            # every frame (as smoothscale used to) was a big main-thread cost
+            # that starved the YOLO detector thread of CPU/GIL time.
+            self._scaled_buf = pygame.Surface((self.draw_w, self.draw_h)).convert()
+            # The black letterbox bars never change between resizes, so fill
+            # them once here instead of screen.fill() every frame.
+            self.screen.fill((0, 0, 0))
+
     def handle_resize(self, w: int, h: int) -> None:
         self.win_w, self.win_h = max(320, w), max(180, h)
         self.screen = pygame.display.set_mode((self.win_w, self.win_h), pygame.RESIZABLE)
@@ -78,10 +90,15 @@ class Display:
 
     def present(self) -> None:
         """Blit the canvas to the window (scaled + letterboxed) and flip."""
-        if self.scale == 1 and self.off_x == 0 and self.off_y == 0:
+        if self._scaled_buf is None:
             self.screen.blit(self.canvas, (0, 0))
         else:
-            self.screen.fill((0, 0, 0))
-            scaled = pygame.transform.smoothscale(self.canvas, (self.draw_w, self.draw_h))
-            self.screen.blit(scaled, (self.off_x, self.off_y))
+            # Nearest-neighbour scale into a reused buffer. smoothscale here
+            # allocated a fresh window-sized surface and did a bicubic filter
+            # of the whole 1080p canvas EVERY frame — the single biggest
+            # main-thread cost, and it starved the detector thread (see
+            # DETECTION_POSTMORTEM.md in the deployment repo). The quality
+            # difference is invisible in motion on a projector.
+            pygame.transform.scale(self.canvas, (self.draw_w, self.draw_h), self._scaled_buf)
+            self.screen.blit(self._scaled_buf, (self.off_x, self.off_y))
         pygame.display.flip()

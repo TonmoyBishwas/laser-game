@@ -119,6 +119,17 @@ class MenuScene(Scene):
             rect.center = (GAME_W // 2, top + i * (tile_h + gap) + tile_h // 2)
             self._tiles[name] = rect
 
+        # All the menu text is static — render it once instead of every frame
+        # (repeated font.render calls are needless main-thread work).
+        self._title_surf = self.font_title.render("laser-arcade", True, palette.CYAN)
+        self._hint_surf = self.font_hint.render(
+            "Rest the pointer on a game to start  |  M menu  |  Q quit",
+            True, palette.SLATE)
+        self._labels = {
+            name: self.font_item.render(name.replace("_", " ").title(), True, palette.WHITE)
+            for name in self.names
+        }
+
     def update(self, dt: float, pointer: Pointer) -> None:
         # Which tile is the pointer over?
         self._hover = None
@@ -136,10 +147,10 @@ class MenuScene(Scene):
             self.app.launch(self._hover)
 
     def draw(self, surface: pygame.Surface) -> None:
-        from arcade.config import GAME_W
+        from arcade.config import GAME_H, GAME_W
         surface.fill(palette.BLACK)
 
-        title = self.font_title.render("laser-arcade", True, palette.CYAN)
+        title = self._title_surf
         surface.blit(title, (GAME_W // 2 - title.get_width() // 2, 150))
 
         for name, rect in self._tiles.items():
@@ -148,7 +159,7 @@ class MenuScene(Scene):
             pygame.draw.rect(surface, (20, 24, 38), rect, border_radius=16)
             pygame.draw.rect(surface, border, rect, width=4, border_radius=16)
 
-            label = self.font_item.render(name.replace("_", " ").title(), True, palette.WHITE)
+            label = self._labels[name]
             surface.blit(label, (rect.centerx - label.get_width() // 2,
                                  rect.centery - label.get_height() // 2))
 
@@ -157,8 +168,5 @@ class MenuScene(Scene):
                 pygame.draw.rect(surface, palette.GOLD,
                                  (rect.left + 20, rect.bottom - 16, bar_w, 8), border_radius=4)
 
-        hint = self.font_hint.render(
-            "Rest the pointer on a game to start  |  M menu  |  Q quit",
-            True, palette.SLATE)
-        from arcade.config import GAME_H
+        hint = self._hint_surf
         surface.blit(hint, (GAME_W // 2 - hint.get_width() // 2, GAME_H - 80))

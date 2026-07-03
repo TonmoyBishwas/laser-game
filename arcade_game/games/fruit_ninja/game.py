@@ -118,6 +118,7 @@ class Popup:
     alpha: float = 255.0
     vy: float = -100.0
     big: bool = True
+    surf: Optional[pygame.Surface] = None   # rendered once on first draw, reused
 
     def update(self, dt: float) -> None:
         self.y += self.vy * dt
@@ -151,6 +152,24 @@ class FruitNinjaGame(Scene):
         self.bomb_image = self._bomb_placeholder()
         self.background = self._load_background()
 
+        # Pre-rotate every sprite into 10° buckets ONCE. transform.rotate per
+        # fruit/bomb per frame allocated a fresh surface each call and was one
+        # of the main per-frame costs (it starved the detector thread on the
+        # real laser rig). 10° steps ≈ per-frame granularity at the game's
+        # rotation speeds, so the quantisation is invisible.
+        self._rot_whole = self._prerotate(self.apple_whole)
+        self._rot_half_l = self._prerotate(self.apple_half_l)
+        self._rot_half_r = self._prerotate(self.apple_half_r)
+        self._rot_bomb = self._prerotate(self.bomb_image)
+
+        # Pre-rendered juice dots per (color, radius) — a new SRCALPHA surface
+        # per particle per frame was the dominant cost during combos.
+        self._dot_cache = {
+            (color, r): self._make_dot(color, r)
+            for color in JUICE_COLORS
+            for r in range(1, 10)
+        }
+
         # Game state.
         self.fruits: List[Fruit] = []
         self.bombs: List[Bomb] = []
@@ -172,6 +191,15 @@ class FruitNinjaGame(Scene):
         self.score_font = pygame.font.Font(None, 72)
         self.hud_font = pygame.font.Font(None, 48)
         self.game_over_font = pygame.font.Font(None, 120)
+
+        # Game-over screen surfaces, built once when the screen first shows.
+        self._go_cache: Optional[tuple] = None
+
+        # HUD text caches — the label is static; the score only changes when
+        # something is sliced, so re-render it on change, not per frame.
+        self._lives_label = self.hud_font.render("LIVES:", True, WHITE)
+        self._score_surf = self.score_font.render("SCORE: 0", True, WHITE)
+        self._score_shown = 0
 
     # ── asset loading ────────────────────────────────────────────────────────
 
@@ -227,6 +255,17 @@ class FruitNinjaGame(Scene):
             return None
 
     @staticmethod
+    def _prerotate(image: pygame.Surface, step: int = 10) -> List[pygame.Surface]:
+        """Rotate a sprite into 360/step pre-baked frames (index = angle // step)."""
+        return [pygame.transform.rotate(image, a) for a in range(0, 360, step)]
+
+    @staticmethod
+    def _make_dot(color: Tuple[int, int, int], r: int) -> pygame.Surface:
+        dot = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
+        pygame.draw.circle(dot, color, (r, r), r)
+        return dot
+
+    @staticmethod
     def _make_halves(sprite: pygame.Surface) -> Tuple[pygame.Surface, pygame.Surface]:
         """Return (left, right) copies of a sprite with the opposite side cleared."""
         w, h = sprite.get_size()
@@ -272,6 +311,7 @@ class FruitNinjaGame(Scene):
         self.game_over = False
         self.spawn_timer = 0.0
         self.last_pointer_pos = None
+        self._go_cache = None
 
     # ── spawning ─────────────────────────────────────────────────────────────
 
@@ -407,46 +447,50 @@ class FruitNinjaGame(Scene):
             surface.fill(BLACK)
 
         for bomb in self.bombs:
-            self._draw_rotated(surface, self.bomb_image, bomb.x, bomb.y, bomb.rotation)
+            self._draw_rotated(surface, self._rot_bomb, bomb.x, bomb.y, bomb.rotation)
 
         for fruit in self.fruits:
             if fruit.sliced:
                 gap = fruit.split_gap
                 tilt = gap * 0.25
-                self._draw_rotated(surface, self.apple_half_l,
+                self._draw_rotated(surface, self._rot_half_l,
                                    fruit.x - gap, fruit.y, fruit.rotation + tilt)
-                self._draw_rotated(surface, self.apple_half_r,
+                self._draw_rotated(surface, self._rot_half_r,
                                    fruit.x + gap, fruit.y, fruit.rotation - tilt)
             else:
-                self._draw_rotated(surface, self.apple_whole, fruit.x, fruit.y, fruit.rotation)
+                self._draw_rotated(surface, self._rot_whole, fruit.x, fruit.y, fruit.rotation)
 
-        # Juice splatter.
+        # Juice splatter — cached dots, alpha modulated per particle.
         for p in self.particles:
             alpha = int(255 * max(0.0, p.life / p.max_life))
             r = max(1, int(p.radius))
-            dot = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
-            pygame.draw.circle(dot, (*p.color, alpha), (r, r), r)
+            dot = self._dot_cache[(p.color, r)]
+            dot.set_alpha(alpha)
             surface.blit(dot, (int(p.x) - r, int(p.y) - r))
 
         for popup in self.popups:
-            font = self.score_font if popup.big else self.hud_font
-            text_surf = font.render(popup.text, True, popup.color)
-            text_surf.set_alpha(int(popup.alpha))
-            surface.blit(text_surf, text_surf.get_rect(center=(popup.x, popup.y)))
+            if popup.surf is None:
+                font = self.score_font if popup.big else self.hud_font
+                popup.surf = font.render(popup.text, True, popup.color)
+            popup.surf.set_alpha(int(popup.alpha))
+            surface.blit(popup.surf, popup.surf.get_rect(center=(popup.x, popup.y)))
 
         self._draw_hud(surface)
 
         if self.game_over:
             self._draw_game_over(surface)
 
-    def _draw_rotated(self, surface, image, x, y, angle) -> None:
-        rotated = pygame.transform.rotate(image, angle)
+    def _draw_rotated(self, surface, frames: List[pygame.Surface], x, y, angle) -> None:
+        rotated = frames[int(angle % 360) // 10]
         surface.blit(rotated, rotated.get_rect(center=(int(x), int(y))))
 
     def _draw_hud(self, surface: pygame.Surface) -> None:
-        surface.blit(self.score_font.render(f"SCORE: {self.score}", True, WHITE), (30, 20))
+        if self.score != self._score_shown:
+            self._score_surf = self.score_font.render(f"SCORE: {self.score}", True, WHITE)
+            self._score_shown = self.score
+        surface.blit(self._score_surf, (30, 20))
 
-        surface.blit(self.hud_font.render("LIVES:", True, WHITE), (GAME_W - 280, 28))
+        surface.blit(self._lives_label, (GAME_W - 280, 28))
         for i in range(self.lives):
             hx = GAME_W - 140 + i * 42
             hy = 44
@@ -455,17 +499,19 @@ class FruitNinjaGame(Scene):
             pygame.draw.polygon(surface, RED, [(hx - 12, hy + 5), (hx + 26, hy + 5), (hx + 7, hy + 26)])
 
     def _draw_game_over(self, surface: pygame.Surface) -> None:
-        overlay = pygame.Surface((GAME_W, GAME_H), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 180))
+        # This screen shows for many frames — build its surfaces once and reuse
+        # (the score is frozen once the game is over).
+        if self._go_cache is None:
+            overlay = pygame.Surface((GAME_W, GAME_H), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 180))
+            go = self.game_over_font.render("GAME OVER", True, RED)
+            sc = self.score_font.render(f"Final Score: {self.score}", True, WHITE)
+            hint = self.hud_font.render("Press R to restart", True, CYAN)
+            self._go_cache = (overlay, go, sc, hint)
+        overlay, go, sc, hint = self._go_cache
         surface.blit(overlay, (0, 0))
-
-        go = self.game_over_font.render("GAME OVER", True, RED)
         surface.blit(go, go.get_rect(center=(GAME_W // 2, GAME_H // 2 - 70)))
-
-        sc = self.score_font.render(f"Final Score: {self.score}", True, WHITE)
         surface.blit(sc, sc.get_rect(center=(GAME_W // 2, GAME_H // 2 + 20)))
-
-        hint = self.hud_font.render("Press R to restart", True, CYAN)
         surface.blit(hint, hint.get_rect(center=(GAME_W // 2, GAME_H // 2 + 100)))
 
 

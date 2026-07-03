@@ -89,6 +89,7 @@ class Thief:
 
         # Walk animation (sprite sheet frames assigned by the game; may be empty).
         self.walk_frames: list[pygame.Surface] = []
+        self._flipped_frames: list[pygame.Surface] | None = None  # mirrored cache
         self._anim_t: float = 0.0
         self._anim_index: int = 0
         self._facing_left: bool = False
@@ -381,9 +382,15 @@ class Thief:
         plain rectangle if no art is loaded.
         """
         if self.walk_frames:
-            frame = self.walk_frames[self._anim_index]
             if self._facing_left:
-                frame = pygame.transform.flip(frame, True, False)
+                # Mirror the frames once and reuse — transform.flip allocated a
+                # new surface every frame the thief walked left.
+                if self._flipped_frames is None or len(self._flipped_frames) != len(self.walk_frames):
+                    self._flipped_frames = [pygame.transform.flip(f, True, False)
+                                            for f in self.walk_frames]
+                frame = self._flipped_frames[self._anim_index]
+            else:
+                frame = self.walk_frames[self._anim_index]
             rect = frame.get_rect(center=(int(self.pos[0]), int(self.pos[1])))
             surface.blit(frame, rect.topleft)
             return
