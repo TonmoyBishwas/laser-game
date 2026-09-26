@@ -29,6 +29,7 @@ clips_extra/
 
 # Generated background PNGs (regenerate with make_bg_images.py)
 backgrounds/
+bg_pack/
 
 # Dataset (large, redownload from Roboflow if needed)
 Laser-Detection-1/
