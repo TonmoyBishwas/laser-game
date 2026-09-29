@@ -56,6 +56,26 @@ PROFILES = {
                 "DROIDCAM_DEVICE_INDEX": 2, "MAX_DETECT_FPS": 12},
 }
 
+# The older RED-laser model (YOLO26-S), kept alongside the deployed green one.
+# --laser red swaps the model path (same format the profile picked: OpenVINO
+# folder or .pt) AND the colour gate, in one step, so the two never disagree.
+_RED_DIR = os.path.join(_REPO_ROOT, r"runs\detect\laser_detector_run_red\weights")
+LASER_MODELS = {
+    "green": {"pt": os.path.join(_REPO_ROOT, r"runs\detect\laser_detector_run\weights\best.pt"),
+              "openvino": _OPENVINO_MODEL},
+    "red":   {"pt": os.path.join(_RED_DIR, "best.pt"),
+              "openvino": os.path.join(_RED_DIR, "best_openvino_model")},
+}
+
+
+def apply_laser_color(cfg, color: str) -> None:
+    """Point cfg at the model + colour gate for the chosen laser. Call AFTER the
+    profile overrides so it keeps the profile's backend choice (OpenVINO vs .pt)."""
+    fmt = "openvino" if "openvino" in str(cfg.MODEL_PATH).lower() else "pt"
+    cfg.MODEL_PATH = LASER_MODELS[color][fmt]
+    cfg.LASER_COLOR = color
+    print(f"[laser] colour={color} -> model {cfg.MODEL_PATH}")
+
 import argparse
 import threading
 import time
@@ -183,8 +203,11 @@ def main() -> None:
                              "'uni' = OpenVINO on the Intel iGPU + imgsz 320 + cam 2; "
                              "'uni-cpu' = CPU best.pt + imgsz 512 + cam 2 (fallback)")
     parser.add_argument("--no-color-gate", action="store_true", dest="no_color_gate",
-                        help="disable the green-only laser filter (use only if a washed-out laser "
+                        help="disable the laser-colour filter (use only if a washed-out laser "
                              "stops being detected)")
+    parser.add_argument("--laser", type=str, default="green", choices=list(LASER_MODELS),
+                        help="which laser pointer is in use: 'green' (default, YOLO26-nano) or "
+                             "'red' (older YOLO26-S). Swaps the model and the colour gate.")
     args = parser.parse_args()
 
     # Apply the device profile BEFORE the detector thread reads cfg.YOLO_*.
@@ -192,6 +215,7 @@ def main() -> None:
     overrides = PROFILES[args.profile]
     for k, v in overrides.items():
         setattr(cfg, k, v)
+    apply_laser_color(cfg, args.laser)
     if args.no_color_gate:
         cfg.LASER_COLOR_GATE = False
     print(f"[main] profile='{args.profile}' -> {overrides}")

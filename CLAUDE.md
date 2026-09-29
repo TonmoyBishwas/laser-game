@@ -141,6 +141,11 @@ steady detection is confirmed on the i7): the green color gate at H_LO=35, the
   both committed). Test mAP50 ≈ 0.881 @ 640, ≈ 0.816 @ 320 (deployed size).
 - `runs/detect/laser_detector_run/args.yaml` is STALE — it describes the old
   red-laser training run, not the green model. Don't cite it.
+- The old **red-laser YOLO26-S** lives at `runs/detect/laser_detector_run_red/weights/`
+  (`best.pt` + `best_openvino_model/` @ 320, both committed). Select it with
+  `--laser red` on `play_laser_arcade.py`, `game.main` and `flashlight_sandbox.py`:
+  that swaps the model path AND the colour gate (`cfg.LASER_COLOR`, red hue bands
+  wrap 0-10 / 170-179) together. Default stays green.
 - The RL thief Q-table (`policies/thief_qtable.npz`) is tied to the fixed
   15×9 maze in the original game; the arcade thief uses A* and needs no
   training.

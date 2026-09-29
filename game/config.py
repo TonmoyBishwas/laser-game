@@ -25,6 +25,14 @@ YOLO_DEVICE = "cuda:0"
 # borderline frames, making the spotlight flicker on/off (uncatchable). Disable
 # entirely with --no-color-gate if a washed-out laser ever still drops out.
 LASER_COLOR_GATE      = True
+# Which laser is in use: "green" (deployed YOLO26-nano) or "red" (the older
+# YOLO26-S in runs/detect/laser_detector_run_red). Switch at launch with
+# --laser red|green; that swaps MODEL_PATH AND the colour gate together.
+LASER_COLOR           = "green"
+# Red gate: OpenCV hue wraps at 180, so a red dot reads ~0-10 OR ~170-179. The
+# blown-out core is white; the halo is what these bands catch. (Same S/V/pixel
+# thresholds as green.)
+RED_GATE_H_BANDS      = ((0, 10), (170, 179))
 GREEN_GATE_H_LO       = 35    # OpenCV hue (0-179); the 532nm laser films ~60 but an
                               # overexposed dot can read down into the 35-45 range, so
                               # keep the low edge at 35 (anything stricter clipped the
@@ -53,13 +61,13 @@ CALIBRATION_FILE = os.path.join(
 # ── Spotlight ──────────────────────────────────────────────────────────────────
 SPOTLIGHT_RADIUS    = 160   # game pixels — generous so player can find the thief
 SPOTLIGHT_FADE_SECS = 0.3
-LASER_STALE_SECS    = 0.35   # hold the last laser spot this long before the spotlight
+LASER_STALE_SECS    = 0.55   # hold the last laser spot this long before the spotlight
                              # fades. MUST be > 2 detector intervals: with
                              # MAX_DETECT_FPS 12 one inference every ~83 ms, so the old
                              # 0.15 s let a SINGLE missed detection blank the pointer
-                             # (the on/off flicker seen on the i7). 0.35 s bridges up to
-                             # ~3 missed inferences. Higher = more bridging but more lag
-                             # on fast laser moves.
+                             # (the on/off flicker seen on the i7). 0.55 s (field-tested
+                             # on the i7, 2026-09-29) bridges ~6 missed inferences.
+                             # Higher = more bridging but more lag on fast laser moves.
 
 # ── Maze ───────────────────────────────────────────────────────────────────────
 GRID_COLS, GRID_ROWS = 15, 9

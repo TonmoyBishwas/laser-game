@@ -35,10 +35,16 @@ def _is_green_laser(frame_bgr, x1, y1, x2, y2) -> bool:
         return False
     hsv = cv2.cvtColor(frame_bgr[yi1:yi2, xi1:xi2], cv2.COLOR_BGR2HSV)
     h_ch, s_ch, v_ch = hsv[..., 0], hsv[..., 1], hsv[..., 2]
-    green = (
-        (h_ch >= cfg.GREEN_GATE_H_LO) & (h_ch <= cfg.GREEN_GATE_H_HI) &
-        (s_ch >= cfg.GREEN_GATE_S_MIN) & (v_ch >= cfg.GREEN_GATE_V_MIN)
-    )
+    # Hue bands for the laser in use (cfg.LASER_COLOR): green is one band, red
+    # wraps around OpenCV's 0/179 seam so it is two.
+    if getattr(cfg, "LASER_COLOR", "green") == "red":
+        bands = cfg.RED_GATE_H_BANDS
+    else:
+        bands = ((cfg.GREEN_GATE_H_LO, cfg.GREEN_GATE_H_HI),)
+    hue_ok = np.zeros(h_ch.shape, dtype=bool)
+    for lo, hi in bands:
+        hue_ok |= (h_ch >= lo) & (h_ch <= hi)
+    green = hue_ok & (s_ch >= cfg.GREEN_GATE_S_MIN) & (v_ch >= cfg.GREEN_GATE_V_MIN)
     count = int(np.count_nonzero(green))
     return count >= cfg.GREEN_GATE_MIN_PIXELS and (count / area) >= cfg.GREEN_GATE_MIN_FRACTION
 
@@ -100,8 +106,9 @@ class DetectorThread(threading.Thread):
               f"conf={cfg.YOLO_CONF}, imgsz={cfg.YOLO_IMGSZ}")
 
         gate_on = getattr(cfg, "LASER_COLOR_GATE", True)
-        print(f"[detector] green color gate {'ON' if gate_on else 'OFF'}"
-              f"{' (rejects non-green blobs like the treasure)' if gate_on else ' (--no-color-gate)'}")
+        color = getattr(cfg, "LASER_COLOR", "green")
+        print(f"[detector] laser colour = {color}; colour gate {'ON' if gate_on else 'OFF'}"
+              f"{f' (rejects non-{color} blobs like the treasure)' if gate_on else ' (--no-color-gate)'}")
 
         last_report = time.time()
         infer_count = 0

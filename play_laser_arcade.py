@@ -49,7 +49,8 @@ import cv2  # noqa: F401  (keep the same import context as game.main)
 from game import calibration as cal_mod
 from game import capture as cap_mod
 from game import detector as det_mod
-from game.main import SharedState, _open_camera, PROFILES, _run_debug_preview
+from game.main import (SharedState, _open_camera, PROFILES, LASER_MODELS,
+                       apply_laser_color, _run_debug_preview)
 import game.config as cfg
 
 # Vendored engine + games (from arcade_game/ on sys.path)
@@ -179,6 +180,9 @@ def main() -> None:
     parser.add_argument("--no-color-gate", action="store_true", dest="no_color_gate",
                         help="disable the green-only filter (use only if a washed-out laser stops "
                              "being detected; the filter is what stops the treasure being detected)")
+    parser.add_argument("--laser", type=str, default="green", choices=list(LASER_MODELS),
+                        help="which laser pointer is in use: 'green' (default, YOLO26-nano) or "
+                             "'red' (older YOLO26-S). Swaps the model and the colour gate.")
     parser.add_argument("--imgsz", type=int, default=None,
                         help="override YOLO input size (overrides the profile). Lower = much faster "
                              "CPU inference: try 320 with --profile uni-cpu if detection is laggy "
@@ -193,6 +197,7 @@ def main() -> None:
     for k, v in overrides.items():
         setattr(cfg, k, v)
     print(f"[arcade] profile='{args.profile}' -> {overrides}")
+    apply_laser_color(cfg, args.laser)
     if args.no_color_gate:
         cfg.LASER_COLOR_GATE = False
     if args.imgsz is not None:

@@ -67,7 +67,7 @@ from game.detector import DetectorStats
 # (this file used to carry a hand-copied — and stale — duplicate). Note the
 # sandbox's own --max-detect-fps flag is applied AFTER the profile, so it
 # still wins over any MAX_DETECT_FPS a profile sets.
-from game.main import PROFILES
+from game.main import PROFILES, LASER_MODELS, apply_laser_color
 
 TUNING_FILE = "flashlight_tuning.json"
 
@@ -179,12 +179,16 @@ def main() -> None:
                    help="cap inference FPS so it doesn't starve rendering. "
                         "With a fast backend (onnx) running flat-out hogs the "
                         "CPU and the screen stalls; 0 = unlimited.")
+    p.add_argument("--laser", default="green", choices=list(LASER_MODELS),
+                   help="which laser is in use: green (default) or red — swaps "
+                        "the model and the colour gate, same as the game launchers")
     p.add_argument("--windowed", action="store_true")
     p.add_argument("--recalibrate", action="store_true")
     args = p.parse_args()
 
     for k, v in PROFILES[args.profile].items():
         setattr(cfg, k, v)
+    apply_laser_color(cfg, args.laser)
     if args.device is not None:
         cfg.DROIDCAM_DEVICE_INDEX = args.device
     if args.imgsz is not None:
