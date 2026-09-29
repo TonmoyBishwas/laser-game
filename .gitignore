@@ -63,3 +63,9 @@ runs/detect/*/results.png
 
 # Claude's plans (per-machine)
 .claude/
+bg_pack_all/
+laser_bg_pack.zip
+bg_pack_jpg/
+laser_bg_pack_jpg.zip
+bg_pack_min/
+laser_bg_pack_min.zip

@@ -9,3 +9,4 @@ opencv-python
 numpy
 pygame>=2.5
 onnxruntime
+openvino>=2024.0
