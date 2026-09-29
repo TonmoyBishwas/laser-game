@@ -16,7 +16,8 @@ SPOTLIGHT_FADE_SECS = 0.3     # how quickly the light fades in/out
 GRID_COLS, GRID_ROWS = 15, 9
 CELL_W = GAME_W // GRID_COLS   # 128
 CELL_H = GAME_H // GRID_ROWS   # 120
-CELL_TRANSITION_SECS = 1.20    # seconds for the thief to slide one cell
+CELL_TRANSITION_SECS = 1.45    # seconds for the thief to slide one cell (1.20 -> 1.45:
+                               # too fast to track with a shaky real laser on the i7)
 
 # ── Thief + treasure sizes ───────────────────────────────────────────────────────
 THIEF_W, THIEF_H = 60, 80
@@ -71,10 +72,13 @@ CATCH_DECAY_RATIO = 0.9       # how fast progress drains when the beam slips off
 # Catching used to be "park the beam on the thief for a second." Now the instant the
 # beam lands on it, the thief speed-bursts to break your aim — every catch becomes a
 # short chase. Primary dial for THIS feature: lower BOLT_SPEED_MULT = harder to track.
-BOLT_SPEED_MULT = 0.5         # multiplies the cell-crossing time while lit (lower = faster)
-BOLT_MIN_SECS   = 0.5         # floor on cell-crossing time so the bolt never gets absurd
+BOLT_SPEED_MULT = 0.7         # multiplies the cell-crossing time while lit (lower = faster).
+                              # Softened 0.5 -> 0.7: with the real laser a flickering
+                              # detection re-triggers the bolt constantly, so a 2x sprint
+                              # made the thief uncatchable.
+BOLT_MIN_SECS   = 0.7         # floor on cell-crossing time so the bolt never gets absurd
                               # (keeps it catchable when stacked with the escape speed-up)
-BOLT_DURATION   = 0.7         # secs the sprint lingers after the beam slips off (momentum)
+BOLT_DURATION   = 0.4         # secs the sprint lingers after the beam slips off (momentum)
 
 # ── Edge glow (hint pointing toward the thief) ───────────────────────────────────
 EDGE_GLOW_DEPTH = 60

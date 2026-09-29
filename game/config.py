@@ -53,11 +53,13 @@ CALIBRATION_FILE = os.path.join(
 # ── Spotlight ──────────────────────────────────────────────────────────────────
 SPOTLIGHT_RADIUS    = 160   # game pixels — generous so player can find the thief
 SPOTLIGHT_FADE_SECS = 0.3
-LASER_STALE_SECS    = 0.15   # hold the last laser spot this long before the spotlight
-                             # fades. Bumped 0.10 -> 0.15 to bridge brief single-frame
-                             # detection gaps so the spotlight (and catch progress)
-                             # stays steady instead of blinking. Higher = more bridging
-                             # but more lag on fast laser moves.
+LASER_STALE_SECS    = 0.35   # hold the last laser spot this long before the spotlight
+                             # fades. MUST be > 2 detector intervals: with
+                             # MAX_DETECT_FPS 12 one inference every ~83 ms, so the old
+                             # 0.15 s let a SINGLE missed detection blank the pointer
+                             # (the on/off flicker seen on the i7). 0.35 s bridges up to
+                             # ~3 missed inferences. Higher = more bridging but more lag
+                             # on fast laser moves.
 
 # ── Maze ───────────────────────────────────────────────────────────────────────
 GRID_COLS, GRID_ROWS = 15, 9
