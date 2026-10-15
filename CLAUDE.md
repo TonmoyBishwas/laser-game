@@ -25,17 +25,16 @@ under Python's **GIL** — that fact drives rule #1.
 
 ## Rule 1 — NEVER do per-frame work you could do once (the demo-killer)
 
-The 2026-06 detection failure was NOT the camera, model, color gate, or
-confidence. It was the game's main thread hogging the CPU/GIL with per-frame
-pygame work, starving the detector thread until detection collapsed to zero.
-The engine was fixed on 2026-07-03 (2.6–3.9× less main-thread work). Keep it
-fixed:
+Per-frame pygame work on the main thread holds the CPU/GIL and starves the
+detector thread until detection collapses to zero — this, not the camera,
+model, color gate, or confidence, caused the 2026-06 detection failure. Keep
+the main thread lean:
 
 - **No `pygame.Surface(...)` allocation inside `draw()`/`update()`.** Allocate
   scratch/overlay surfaces once in `__init__` and reuse (`fill()` to reset).
 - **No `pygame.font.SysFont(...)` or `font.render(static text)` per frame.**
   Pre-render static text once; re-render dynamic text only when its value
-  changes. (The old ESCAPE! banner built 2 fonts + 37 renders per frame.)
+  changes.
 - **No `transform.smoothscale`/`rotate`/`flip` of the same image per frame.**
   Pre-compute (rotation buckets, pre-flipped frames, prescaled buffers).
 - **Keep the detector throttled:** `MAX_DETECT_FPS: 12` in the `uni`/`uni-cpu`
@@ -44,7 +43,7 @@ fixed:
 - **Keep render FPS capped at 30** for the laser build (the launcher's
   `--render-fps` default). 60 doubles the GIL pressure for no visible gain.
 - Reference implementations of "done right": `flashlight_sandbox.py`,
-  `game/game_loop.py`, and (since 2026-07-03) the arcade engine itself.
+  `game/game_loop.py`, and the arcade engine itself.
 
 If a new game or effect needs something expensive every frame, budget it: the
 whole main-thread frame should stay in the low single-digit milliseconds.
@@ -57,17 +56,16 @@ Do these FIRST, in order, before touching any threshold:
 
 1. **Run the decisive comparison:** `python flashlight_sandbox.py --device 0`.
    If the sandbox detects fine with the same camera + model, the fault is the
-   **game process** (render load / GIL), not camera/model/gate/conf. This one
-   test would have saved a full wasted day.
+   **game process** (render load / GIL), not camera/model/gate/conf.
 2. **Read the `--debug` stats line** (`[detector] infer=… detect=… gated=…`):
    - `infer` high, `detect` → 0, `gated` = 0 ⇒ detector is starved or the feed
      is dead — NOT a threshold problem.
    - `gated` climbing ⇒ the color gate is rejecting the real laser (exposure
      drift / washed-out dot) — fix the camera app (lock AE/WB/focus) before
      touching the gate.
-3. **Change ONE variable at a time.** The failed debugging shipped many small
-   speculative changes at once (gate tighten→loosen, conf 0.20→0.10, a camera
-   watchdog for a freeze that wasn't happening) and muddied every signal.
+3. **Change ONE variable at a time.** Several speculative changes at once
+   (gate, conf, a camera watchdog) make every signal unreadable, so no test
+   can tell you which change helped.
 4. Do not "fix" the detector's *output* (gate, conf, camera) when the symptom
    pattern says the detector is being *starved*.
 
@@ -91,9 +89,11 @@ steady detection is confirmed on the i7): the green color gate at H_LO=35, the
   not in laser-arcade; a careless full-tree mirror would delete it.
 - Do NOT vendor laser-arcade's `games/fruit/` (legacy) or `games/tower_defense/`
   (uncommitted there).
-- As of 2026-07-03 the two trees are fully converged (the old "thief fixes only
-  exist in the vendored copy" warning in the postmortem is stale). Keep it that
-  way: land changes in source first.
+- Land engine/game changes in laser-arcade first so the two trees stay
+  converged. (The postmortem's "thief fixes only exist in the vendored copy"
+  warning is stale.)
+- laser-arcade also receives pushes from the collaborator: `git pull` there
+  before re-vendoring, or the mirror can roll their work back.
 
 ---
 
@@ -128,8 +128,9 @@ steady detection is confirmed on the i7): the green color gate at H_LO=35, the
   `train_green_yolo26n.ipynb` contains the Roboflow API key and must stay
   untracked. Same for stray notebooks/scripts at the repo root.
 - Commit identity here: `TonmoyBishwas@users.noreply.github.com`; in
-  laser-arcade: `ttonmoy46@gmail.com`. Both repos add the trailer
-  `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`.
+  laser-arcade: `ttonmoy46@gmail.com`. Both repos end commit messages with a
+  `Co-Authored-By: <the Claude model making the commit> <noreply@anthropic.com>`
+  trailer.
 - Never name the collaborator (no name/pronouns in files or commits).
 - Push after every meaningful commit — the uni machine syncs via `git pull`.
 
